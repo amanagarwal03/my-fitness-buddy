@@ -22,6 +22,7 @@ export default function ProfileScreen() {
   const [weightInput, setWeightInput] = useState(''); // shown in current unit
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const load = useCallback(async () => {
     const data = PREVIEW_MODE
@@ -92,6 +93,34 @@ export default function ProfileScreen() {
     Alert.alert('Saved', 'Your profile has been updated.');
   };
 
+  const deleteAccount = () => {
+    if (PREVIEW_MODE) {
+      Alert.alert('Preview mode', 'Connect Supabase to manage your account.');
+      return;
+    }
+    Alert.alert(
+      'Delete account?',
+      'This permanently deletes your account and all your data — meals, photos, workouts, and sharing. This cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            setDeleting(true);
+            const { error } = await supabase.rpc('delete_my_account');
+            setDeleting(false);
+            if (error) {
+              Alert.alert('Could not delete', error.message);
+              return;
+            }
+            await signOut();
+          },
+        },
+      ],
+    );
+  };
+
   return (
     <Screen>
       <ScrollView contentContainerStyle={styles.content}>
@@ -154,6 +183,7 @@ export default function ProfileScreen() {
         <Button title="Save profile" onPress={save} loading={saving} />
         <View style={{ height: Spacing.three }} />
         <Button title="Sign out" variant="secondary" onPress={signOut} />
+        <Button title="Delete account" variant="danger" onPress={deleteAccount} loading={deleting} />
       </ScrollView>
     </Screen>
   );

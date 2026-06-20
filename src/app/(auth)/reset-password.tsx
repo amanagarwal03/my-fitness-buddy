@@ -1,7 +1,7 @@
 import * as Linking from 'expo-linking';
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
-import { Alert, ScrollView, StyleSheet, View } from 'react-native';
+import { useRef, useState } from 'react';
+import { Alert, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
 import { Button, Field } from '@/components/ui';
@@ -20,6 +20,11 @@ export default function ResetPasswordScreen() {
   const [confirm, setConfirm] = useState('');
   const [loading, setLoading] = useState(false);
   const [sent, setSent] = useState(false);
+  const scrollRef = useRef<ScrollView>(null);
+
+  const handleFieldFocus = () => {
+    setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 120);
+  };
 
   // When a recovery link has been opened, we have a temporary session and show
   // the "set a new password" form. Otherwise we show the "request reset" form.
@@ -63,12 +68,14 @@ export default function ResetPasswordScreen() {
   };
 
   return (
-    <View style={{ flex: 1, backgroundColor: theme.background }}>
+    <KeyboardAvoidingView
+      style={{ flex: 1, backgroundColor: theme.background }}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
         <ScrollView
+          ref={scrollRef}
           contentContainerStyle={styles.scroll}
           keyboardShouldPersistTaps="handled"
-          keyboardDismissMode="interactive"
-          automaticallyAdjustKeyboardInsets>
+          keyboardDismissMode="on-drag">
           <View style={styles.iconWrap}>
             <ThemedText style={{ fontSize: 40 }}>🔐</ThemedText>
           </View>
@@ -85,6 +92,7 @@ export default function ResetPasswordScreen() {
                 label="New password"
                 value={password}
                 onChangeText={setPassword}
+                onFocus={handleFieldFocus}
                 secureTextEntry
                 placeholder="••••••••"
               />
@@ -92,6 +100,7 @@ export default function ResetPasswordScreen() {
                 label="Confirm password"
                 value={confirm}
                 onChangeText={setConfirm}
+                onFocus={handleFieldFocus}
                 secureTextEntry
                 placeholder="••••••••"
               />
@@ -120,6 +129,7 @@ export default function ResetPasswordScreen() {
                 label="Email"
                 value={email}
                 onChangeText={setEmail}
+                onFocus={handleFieldFocus}
                 autoCapitalize="none"
                 keyboardType="email-address"
                 autoComplete="email"
@@ -130,7 +140,7 @@ export default function ResetPasswordScreen() {
             </>
           )}
         </ScrollView>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 

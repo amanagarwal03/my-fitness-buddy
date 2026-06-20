@@ -20,8 +20,10 @@
       },
       "predictiveBackGestureEnabled": false,
       "permissions": [
-        "android.permission.RECORD_AUDIO",
         "android.permission.CAMERA"
+      ],
+      "blockedPermissions": [
+        "android.permission.RECORD_AUDIO"
       ]
     },
     "web": {
@@ -50,7 +52,8 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "My Fitness Buddy uses your camera so you can scan product barcodes."
+          "cameraPermission": "My Fitness Buddy uses your camera so you can scan product barcodes.",
+          "recordAudioAndroid": false
         }
       ]
     ],

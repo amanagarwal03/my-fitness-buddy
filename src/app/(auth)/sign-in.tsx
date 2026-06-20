@@ -1,8 +1,8 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Linking from 'expo-linking';
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { useRef, useState } from 'react';
+import { Alert, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { BrandLogo } from '@/components/brand-logo';
@@ -25,6 +25,13 @@ export default function SignInScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const scrollRef = useRef<ScrollView>(null);
+
+  // When a field is focused, scroll the card up so it sits above the keyboard
+  // (Android needs this — there's no iOS-style auto inset adjustment).
+  const handleFieldFocus = () => {
+    setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 120);
+  };
 
   const emailRedirect = Linking.createURL('/sign-in');
 
@@ -86,12 +93,14 @@ export default function SignInScreen() {
   };
 
   return (
-    <View style={{ flex: 1, backgroundColor: theme.background }}>
+    <KeyboardAvoidingView
+      style={{ flex: 1, backgroundColor: theme.background }}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
         <ScrollView
+          ref={scrollRef}
           contentContainerStyle={styles.scroll}
           keyboardShouldPersistTaps="handled"
-          keyboardDismissMode="interactive"
-          automaticallyAdjustKeyboardInsets
+          keyboardDismissMode="on-drag"
           showsVerticalScrollIndicator={false}>
           {/* Branded hero */}
           <LinearGradient
@@ -149,6 +158,7 @@ export default function SignInScreen() {
               label="Email"
               value={email}
               onChangeText={setEmail}
+              onFocus={handleFieldFocus}
               autoCapitalize="none"
               keyboardType="email-address"
               autoComplete="email"
@@ -158,6 +168,7 @@ export default function SignInScreen() {
               label="Password"
               value={password}
               onChangeText={setPassword}
+              onFocus={handleFieldFocus}
               secureTextEntry
               placeholder="••••••••"
             />
@@ -183,7 +194,7 @@ export default function SignInScreen() {
             By continuing you agree to track responsibly 💪
           </ThemedText>
         </ScrollView>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
