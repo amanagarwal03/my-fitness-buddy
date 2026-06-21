@@ -14,6 +14,7 @@ type AuthContextValue = {
   recovering: boolean;
   endRecovery: () => void;
   refreshOnboarding: () => Promise<void>;
+  markOnboarded: () => void;
   signOut: () => Promise<void>;
 };
 
@@ -24,6 +25,7 @@ const AuthContext = createContext<AuthContextValue>({
   recovering: false,
   endRecovery: () => {},
   refreshOnboarding: async () => {},
+  markOnboarded: () => {},
   signOut: async () => {},
 });
 
@@ -35,11 +37,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // A user needs onboarding until they have a profile row with a height set.
   const checkOnboarding = useCallback(async (current: Session | null) => {
-    if (!current) {
+    if (!current?.user?.id) {
       setNeedsOnboarding(null);
       return;
     }
-    const { data } = await supabase.from('profiles').select('height_cm').maybeSingle();
+    // Ensure a live access token before the read. With a stale/expired token,
+    // supabase-js falls back to the anon key, RLS hides the user's own row, and
+    // the read comes back empty — which would wrongly bounce an onboarded user
+    // back into onboarding forever. Refresh first so the read is trustworthy.
+    let userId = current.user.id;
+    const { data: sessData } = await supabase.auth.getSession();
+    let live = sessData.session;
+    if (!live || (live.expires_at ?? 0) * 1000 < Date.now() + 5000) {
+      const refreshed = await supabase.auth.refreshSession();
+      if (refreshed.data.session) live = refreshed.data.session;
+    }
+    if (live?.user?.id) userId = live.user.id;
+
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('height_cm')
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    // On a transient/auth error we can't trust the answer — leave the current
+    // state rather than risk bouncing a finished user back to onboarding.
+    if (error) return;
     setNeedsOnboarding(!data || data.height_cm == null);
   }, []);
 
@@ -78,13 +101,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const refreshOnboarding = useCallback(() => checkOnboarding(session), [checkOnboarding, session]);
 
+  // Called right after a successful profile save so the UI advances immediately,
+  // without waiting on (or being second-guessed by) a re-read.
+  const markOnboarded = useCallback(() => setNeedsOnboarding(false), []);
+
   const signOut = async () => {
     await supabase.auth.signOut();
   };
 
   return (
     <AuthContext.Provider
-      value={{ session, initializing, needsOnboarding, recovering, endRecovery, refreshOnboarding, signOut }}>
+      value={{ session, initializing, needsOnboarding, recovering, endRecovery, refreshOnboarding, markOnboarded, signOut }}>
       {children}
     </AuthContext.Provider>
   );

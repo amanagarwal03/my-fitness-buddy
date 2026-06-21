@@ -1,7 +1,7 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { useRef, useState } from 'react';
+import { Alert, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
@@ -32,7 +32,7 @@ const WELCOME_POINTS = [
 export default function OnboardingScreen() {
   const theme = useTheme();
   const router = useRouter();
-  const { session, refreshOnboarding, signOut } = useAuth();
+  const { session, refreshOnboarding, markOnboarded, signOut } = useAuth();
 
   const [step, setStep] = useState(0);
   const [unit, setUnit] = useState<Unit>('kg');
@@ -40,6 +40,13 @@ export default function OnboardingScreen() {
   const [weightInput, setWeightInput] = useState('');
   const [goals, setGoals] = useState(DEFAULT_GOALS);
   const [saving, setSaving] = useState(false);
+  const scrollRef = useRef<ScrollView>(null);
+
+  // Scroll the form up so the focused field clears the keyboard (Android has no
+  // iOS-style automatic inset adjustment).
+  const handleFieldFocus = () => {
+    setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 120);
+  };
 
   const weightKg = weightInput !== '' ? toKg(Number(weightInput), unit) : null;
   const heightNum = heightCm !== '' ? Number(heightCm) : null;
@@ -93,19 +100,24 @@ export default function OnboardingScreen() {
       Alert.alert('Could not save', (pErr ?? gErr)?.message ?? 'Please try again.');
       return;
     }
-    await refreshOnboarding();
+    // The save succeeded under a verified user id, so advance immediately rather
+    // than waiting on a re-read that a stale token could get wrong.
+    markOnboarded();
+    refreshOnboarding();
     router.replace('/(tabs)/nutrition');
   };
 
   const meta = STEP_META[step];
 
   return (
-    <View style={{ flex: 1, backgroundColor: theme.background }}>
+    <KeyboardAvoidingView
+      style={{ flex: 1, backgroundColor: theme.background }}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
       <ScrollView
+        ref={scrollRef}
         contentContainerStyle={styles.scroll}
         keyboardShouldPersistTaps="handled"
-        automaticallyAdjustKeyboardInsets
-        keyboardDismissMode="interactive"
+        keyboardDismissMode="on-drag"
         showsVerticalScrollIndicator={false}>
         {/* Gradient hero */}
         <LinearGradient
@@ -184,6 +196,7 @@ export default function OnboardingScreen() {
                 keyboardType="numeric"
                 value={heightCm}
                 onChangeText={setHeightCm}
+                onFocus={handleFieldFocus}
                 placeholder="175"
               />
               <Field
@@ -191,6 +204,7 @@ export default function OnboardingScreen() {
                 keyboardType="numeric"
                 value={weightInput}
                 onChangeText={setWeightInput}
+                onFocus={handleFieldFocus}
                 placeholder={unit === 'kg' ? '70' : '154'}
               />
               {bmi ? (
@@ -215,24 +229,28 @@ export default function OnboardingScreen() {
                   keyboardType="numeric"
                   value={goals.calories}
                   onChangeText={(t) => setGoals((g) => ({ ...g, calories: t }))}
+                  onFocus={handleFieldFocus}
                 />
                 <Field
                   label="Protein (g)"
                   keyboardType="numeric"
                   value={goals.protein_g}
                   onChangeText={(t) => setGoals((g) => ({ ...g, protein_g: t }))}
+                  onFocus={handleFieldFocus}
                 />
                 <Field
                   label="Carbs (g)"
                   keyboardType="numeric"
                   value={goals.carbs_g}
                   onChangeText={(t) => setGoals((g) => ({ ...g, carbs_g: t }))}
+                  onFocus={handleFieldFocus}
                 />
                 <Field
                   label="Fat (g)"
                   keyboardType="numeric"
                   value={goals.fat_g}
                   onChangeText={(t) => setGoals((g) => ({ ...g, fat_g: t }))}
+                  onFocus={handleFieldFocus}
                 />
                 <Button
                   title="Use recommended"
@@ -255,7 +273,7 @@ export default function OnboardingScreen() {
           </View>
         </View>
       </ScrollView>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
