@@ -1,3 +1,4 @@
+import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, View } from 'react-native';
@@ -55,7 +56,11 @@ export default function WorkoutScreen() {
   const [sessionGroups, setSessionGroups] = useState<Record<string, ExerciseGroup[]>>({});
   const [manualGroups, setManualGroups] = useState<ExerciseGroup[]>([]);
   const [dayMarks, setDayMarks] = useState<Set<string>>(new Set());
-  const [unit, setUnit] = useState<Unit>('kg');
+  // Display unit follows the profile by default, but the user can flip it here
+  // without it resetting on every refresh.
+  const [profileUnit, setProfileUnit] = useState<Unit>('kg');
+  const [unitOverride, setUnitOverride] = useState<Unit | null>(null);
+  const unit = unitOverride ?? profileUnit;
   const [activeElapsed, setActiveElapsed] = useState<number | null>(null);
 
   const checkActive = useCallback(async () => {
@@ -90,7 +95,7 @@ export default function WorkoutScreen() {
         .not('ended_at', 'is', null)
         .order('started_at', { ascending: true }),
     ]);
-    setUnit((profileRes.data?.unit_pref as Unit) ?? 'kg');
+    setProfileUnit((profileRes.data?.unit_pref as Unit) ?? 'kg');
     setDaySessions((sessRes.data as WorkoutSession[]) ?? []);
 
     const rows = (setsRes.data ?? []) as JoinedSet[];
@@ -149,7 +154,6 @@ export default function WorkoutScreen() {
         setDaySessions((prev) => prev.filter((x) => x.id !== s.id));
         return;
       }
-      // Remove the session and its sets (sets cascade via session_id on delete).
       await supabase.from('workout_sets').delete().eq('session_id', s.id);
       await supabase.from('workout_sessions').delete().eq('id', s.id);
       loadDay();
@@ -185,6 +189,13 @@ export default function WorkoutScreen() {
   const hasAnything = daySessions.length > 0 || manualGroups.length > 0;
   const viewingToday = isoDate(selectedDate) === isoDate();
 
+  // Day totals for the summary strip.
+  const totalDuration = daySessions.reduce((a, s) => a + (s.duration_seconds ?? 0), 0);
+  const totalSets =
+    Object.values(sessionGroups)
+      .flat()
+      .reduce((a, g) => a + g.sets.length, 0) + manualGroups.reduce((a, g) => a + g.sets.length, 0);
+
   return (
     <Screen>
       <ScrollView contentContainerStyle={styles.content}>
@@ -215,13 +226,32 @@ export default function WorkoutScreen() {
           onSelect={setSelectedDate}
           markedDays={dayMarks}
         />
-        <ThemedText type="smallBold">Logged on {dayLabel(selectedDate)}</ThemedText>
+
+        {/* Day header + unit toggle */}
+        <View style={styles.dayHeader}>
+          <ThemedText type="smallBold">Logged on {dayLabel(selectedDate)}</ThemedText>
+          {hasAnything ? <UnitToggle unit={unit} onChange={setUnitOverride} /> : null}
+        </View>
 
         {!viewingToday ? (
           <View style={[styles.readOnly, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
             <ThemedText type="small" themeColor="textSecondary">
               📖  Viewing a past day — read only. Switch to Today to log a workout.
             </ThemedText>
+          </View>
+        ) : null}
+
+        {/* Day summary strip */}
+        {hasAnything ? (
+          <View style={styles.summaryRow}>
+            <SummaryStat emoji="⏱" label="Time" value={formatDuration(totalDuration)} accent={theme.primary} />
+            <SummaryStat emoji="🏋️" label="Sets" value={String(totalSets)} accent={theme.success} />
+            <SummaryStat
+              emoji="🔥"
+              label={daySessions.length === 1 ? 'Session' : 'Sessions'}
+              value={String(daySessions.length)}
+              accent="#F59E0B"
+            />
           </View>
         ) : null}
 
@@ -246,49 +276,100 @@ export default function WorkoutScreen() {
         ))}
 
         {!hasAnything ? (
-          <Card>
-            <ThemedText themeColor="textSecondary">Nothing logged on {dayLabel(selectedDate)}.</ThemedText>
+          <Card style={styles.emptyCard}>
+            <ThemedText style={{ fontSize: 34 }}>🏋️</ThemedText>
+            <ThemedText type="smallBold">Nothing logged {dayLabel(selectedDate) === 'Today' ? 'yet' : `on ${dayLabel(selectedDate)}`}</ThemedText>
+            {viewingToday ? (
+              <ThemedText type="small" themeColor="textSecondary" style={{ textAlign: 'center' }}>
+                Tap “Start Workout” above to log your first session.
+              </ThemedText>
+            ) : null}
           </Card>
         ) : null}
 
         {/* Per-body-part logging (incl. cardio) + progress — today only */}
         {viewingToday ? (
-        <>
-        <ThemedText type="smallBold" themeColor="textSecondary">
-          BROWSE BY MUSCLE GROUP
-        </ThemedText>
-        <View style={styles.muscleList}>
-          {BODY_PARTS.map((bp) => {
-            const meta = BODY_PART_META[bp];
-            return (
-              <Pressable
-                key={bp}
-                style={({ pressed }) => [
-                  styles.muscleRow,
-                  {
-                    backgroundColor: pressed ? theme.backgroundElement : theme.background,
-                    borderColor: theme.border,
-                  },
-                ]}
-                onPress={() => router.push({ pathname: '/workout/[bodyPart]', params: { bodyPart: bp } })}>
-                <View style={[styles.muscleBadge, { backgroundColor: meta.color + '22' }]}>
-                  <ThemedText style={{ fontSize: 22 }}>{meta.emoji}</ThemedText>
-                </View>
-                <ThemedText type="smallBold" style={{ flex: 1 }}>
-                  {meta.label}
-                </ThemedText>
-                <View style={[styles.muscleAccent, { backgroundColor: meta.color }]} />
-                <ThemedText type="smallBold" themeColor="textSecondary">
-                  ›
-                </ThemedText>
-              </Pressable>
-            );
-          })}
-        </View>
-        </>
+          <>
+            <ThemedText type="smallBold" themeColor="textSecondary" style={{ marginTop: Spacing.two }}>
+              EXERCISES & PROGRESS
+            </ThemedText>
+            <View style={styles.muscleList}>
+              {BODY_PARTS.map((bp) => {
+                const meta = BODY_PART_META[bp];
+                return (
+                  <Pressable
+                    key={bp}
+                    style={({ pressed }) => [
+                      styles.muscleRow,
+                      {
+                        backgroundColor: pressed ? theme.backgroundElement : theme.background,
+                        borderColor: theme.border,
+                      },
+                    ]}
+                    onPress={() => router.push({ pathname: '/workout/[bodyPart]', params: { bodyPart: bp } })}>
+                    <View style={[styles.muscleBadge, { backgroundColor: meta.color + '22' }]}>
+                      <ThemedText style={{ fontSize: 22 }}>{meta.emoji}</ThemedText>
+                    </View>
+                    <ThemedText type="smallBold" style={{ flex: 1 }}>
+                      {meta.label}
+                    </ThemedText>
+                    <View style={[styles.muscleAccent, { backgroundColor: meta.color }]} />
+                    <ThemedText type="smallBold" themeColor="textSecondary">
+                      ›
+                    </ThemedText>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </>
         ) : null}
       </ScrollView>
     </Screen>
+  );
+}
+
+function UnitToggle({ unit, onChange }: { unit: Unit; onChange: (u: Unit) => void }) {
+  const theme = useTheme();
+  return (
+    <View style={[styles.unitToggle, { borderColor: theme.border }]}>
+      {(['kg', 'lbs'] as Unit[]).map((u) => (
+        <Pressable
+          key={u}
+          onPress={() => onChange(u)}
+          style={[styles.unitOption, { backgroundColor: u === unit ? theme.primary : 'transparent' }]}>
+          <ThemedText type="smallBold" style={{ color: u === unit ? '#fff' : theme.textSecondary }}>
+            {u}
+          </ThemedText>
+        </Pressable>
+      ))}
+    </View>
+  );
+}
+
+function SummaryStat({
+  emoji,
+  label,
+  value,
+  accent,
+}: {
+  emoji: string;
+  label: string;
+  value: string;
+  accent: string;
+}) {
+  const theme = useTheme();
+  return (
+    <View style={[styles.summaryStat, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
+      <View style={[styles.summaryIcon, { backgroundColor: accent + '22' }]}>
+        <ThemedText style={{ fontSize: 16 }}>{emoji}</ThemedText>
+      </View>
+      <ThemedText type="smallBold" style={{ fontSize: 17 }}>
+        {value}
+      </ThemedText>
+      <ThemedText type="small" themeColor="textSecondary">
+        {label}
+      </ThemedText>
+    </View>
   );
 }
 
@@ -312,21 +393,26 @@ function SessionCard({
   const totalSets = groups.reduce((a, g) => a + g.sets.length, 0);
 
   return (
-    <Card>
-      <View style={styles.sessionHeader}>
+    <Card style={styles.sessionCard}>
+      {/* Header */}
+      <View style={styles.sessionTop}>
+        <LinearGradient
+          colors={['#2EA0FF', '#1257B0']}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.sessionBadge}>
+          <ThemedText style={styles.sessionBadgeText}>{index + 1}</ThemedText>
+        </LinearGradient>
         <View style={{ flex: 1 }}>
-          <ThemedText type="smallBold">⏱  Session {index + 1}</ThemedText>
+          <ThemedText type="smallBold">Session {index + 1}</ThemedText>
           <ThemedText type="small" themeColor="textSecondary">
             {clock(start)}
             {end ? ` – ${clock(end)}` : ''}
           </ThemedText>
         </View>
-        <View style={styles.sessionStats}>
-          <ThemedText type="smallBold" themeColor="primary">
+        <View style={[styles.durationPill, { backgroundColor: theme.primary + '18' }]}>
+          <ThemedText type="smallBold" themeColor="primary" style={{ fontVariant: ['tabular-nums'] }}>
             {formatDuration(session.duration_seconds ?? 0)}
-          </ThemedText>
-          <ThemedText type="small" themeColor="textSecondary">
-            {totalSets} {totalSets === 1 ? 'set' : 'sets'}
           </ThemedText>
         </View>
         <Pressable onPress={onDelete} hitSlop={10} style={{ paddingLeft: Spacing.two }}>
@@ -336,56 +422,70 @@ function SessionCard({
         </Pressable>
       </View>
 
+      <View style={[styles.sessionMeta, { borderTopColor: theme.border }]}>
+        <ThemedText type="small" themeColor="textSecondary">
+          {groups.length} {groups.length === 1 ? 'exercise' : 'exercises'} · {totalSets}{' '}
+          {totalSets === 1 ? 'set' : 'sets'}
+        </ThemedText>
+      </View>
+
       {groups.length === 0 ? (
         <ThemedText type="small" themeColor="textSecondary">
           No sets recorded.
         </ThemedText>
       ) : (
-        groups.map((g) => (
-          <View key={g.exerciseId} style={[styles.exerciseBlock, { borderTopColor: theme.border }]}>
-            <ExerciseDetail group={g} unit={unit} />
-          </View>
-        ))
+        groups.map((g) => <ExerciseBlock key={g.exerciseId} group={g} unit={unit} />)
       )}
     </Card>
   );
 }
 
-// One exercise's sets (used inside a session card).
-function ExerciseDetail({ group, unit }: { group: ExerciseGroup; unit: Unit }) {
+// One exercise: color accent bar, name + muscle tag, and sets as chips.
+function ExerciseBlock({ group, unit }: { group: ExerciseGroup; unit: Unit }) {
+  const theme = useTheme();
   const isCardio = group.bodyPart === 'cardio';
   const meta = BODY_PART_META[group.bodyPart];
   return (
-    <View>
-      <View style={styles.exerciseTitleRow}>
-        <ThemedText type="smallBold">
-          {meta?.emoji ?? '🏋️'}  {group.name}
-        </ThemedText>
-        {meta ? (
-          <View style={[styles.groupTag, { backgroundColor: meta.color + '22' }]}>
-            <ThemedText type="small" style={{ color: meta.color, fontWeight: '600' }}>
-              {meta.label}
-            </ThemedText>
-          </View>
-        ) : null}
-      </View>
-      {isCardio
-        ? group.sets.map((s) => (
-            <ThemedText key={s.id} type="small" themeColor="textSecondary">
-              {formatDuration(s.duration_seconds ?? 0)}
-              {s.speed_kmh != null ? ` · ${round1(s.speed_kmh)} km/h` : ''}
-              {s.incline != null ? ` · ${s.incline}% incline` : ''}
-            </ThemedText>
-          ))
-        : group.sets.map((s, i) => (
-            <ThemedText key={s.id} type="small">
-              Set {i + 1}:{'  '}
-              <ThemedText type="smallBold">
-                {s.weight_kg != null ? `${round1(fromKg(s.weight_kg, unit))} ${unit}` : '—'}
+    <View style={styles.exBlock}>
+      <View style={[styles.exAccent, { backgroundColor: meta?.color ?? theme.primary }]} />
+      <View style={{ flex: 1, gap: Spacing.one + 2 }}>
+        <View style={styles.exHeaderRow}>
+          <ThemedText type="smallBold" style={{ flex: 1 }} numberOfLines={1}>
+            {meta?.emoji ?? '🏋️'}  {group.name}
+          </ThemedText>
+          {meta ? (
+            <View style={[styles.muscleTag, { backgroundColor: meta.color + '22' }]}>
+              <ThemedText type="small" style={{ color: meta.color, fontWeight: '700' }}>
+                {meta.label}
               </ThemedText>
-              {s.reps != null ? ` × ${s.reps} reps` : ''}
-            </ThemedText>
+            </View>
+          ) : null}
+        </View>
+        <View style={styles.setChips}>
+          {group.sets.map((s, i) => (
+            <View key={s.id} style={[styles.setChip, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
+              {isCardio ? (
+                <ThemedText type="small">
+                  {formatDuration(s.duration_seconds ?? 0)}
+                  {s.speed_kmh != null ? ` · ${round1(s.speed_kmh)} km/h` : ''}
+                  {s.incline != null ? ` · ${s.incline}%` : ''}
+                </ThemedText>
+              ) : (
+                <ThemedText type="small">
+                  <ThemedText type="small" themeColor="textSecondary">
+                    {i + 1}
+                  </ThemedText>
+                  {'  '}
+                  <ThemedText type="smallBold">
+                    {s.weight_kg != null ? `${round1(fromKg(s.weight_kg, unit))} ${unit}` : '—'}
+                  </ThemedText>
+                  {s.reps != null ? ` × ${s.reps}` : ''}
+                </ThemedText>
+              )}
+            </View>
           ))}
+        </View>
+      </View>
     </View>
   );
 }
@@ -401,10 +501,10 @@ function ExerciseLogCard({
   onDelete: () => void;
 }) {
   return (
-    <Card>
+    <Card style={styles.sessionCard}>
       <View style={styles.sessionRow}>
         <View style={{ flex: 1 }}>
-          <ExerciseDetail group={group} unit={unit} />
+          <ExerciseBlock group={group} unit={unit} />
         </View>
         <Pressable onPress={onDelete} hitSlop={10}>
           <ThemedText type="smallBold" themeColor="danger">
@@ -419,22 +519,65 @@ function ExerciseLogCard({
 const styles = StyleSheet.create({
   content: { padding: Spacing.three, gap: Spacing.three, paddingBottom: Spacing.six },
   titleRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
-  sessionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  sessionHeader: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
-  sessionStats: { alignItems: 'flex-end' },
+  dayHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   readOnly: {
     borderRadius: Spacing.three,
     borderWidth: StyleSheet.hairlineWidth,
     padding: Spacing.three,
   },
-  exerciseTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: Spacing.two },
-  groupTag: { paddingHorizontal: Spacing.two, paddingVertical: 1, borderRadius: 999 },
-  exerciseBlock: {
-    borderTopWidth: StyleSheet.hairlineWidth,
-    paddingTop: Spacing.two,
-    marginTop: Spacing.two,
-    gap: 2,
+  unitToggle: {
+    flexDirection: 'row',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 999,
+    overflow: 'hidden',
   },
+  unitOption: { paddingHorizontal: Spacing.three, paddingVertical: Spacing.one },
+  summaryRow: { flexDirection: 'row', gap: Spacing.two },
+  summaryStat: {
+    flex: 1,
+    alignItems: 'center',
+    gap: 2,
+    paddingVertical: Spacing.three,
+    borderRadius: Spacing.three,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  summaryIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 2,
+  },
+  sessionCard: { gap: 0, padding: Spacing.three },
+  sessionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  sessionTop: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
+  sessionBadge: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sessionBadgeText: { color: '#fff', fontSize: 16, fontWeight: '800' },
+  durationPill: { paddingHorizontal: Spacing.two + 2, paddingVertical: Spacing.one, borderRadius: 999 },
+  sessionMeta: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    marginTop: Spacing.two,
+    paddingTop: Spacing.two,
+  },
+  exBlock: { flexDirection: 'row', gap: Spacing.two, marginTop: Spacing.three },
+  exAccent: { width: 4, borderRadius: 2, alignSelf: 'stretch' },
+  exHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
+  muscleTag: { paddingHorizontal: Spacing.two, paddingVertical: 1, borderRadius: 999 },
+  setChips: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.one + 2 },
+  setChip: {
+    paddingHorizontal: Spacing.two,
+    paddingVertical: Spacing.one,
+    borderRadius: Spacing.two,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  emptyCard: { alignItems: 'center', gap: Spacing.one, paddingVertical: Spacing.four },
   muscleList: { gap: Spacing.two },
   muscleRow: {
     flexDirection: 'row',
