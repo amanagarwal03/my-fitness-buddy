@@ -8,6 +8,7 @@ import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { useAuth } from '@/lib/auth';
 import { formatDuration, isoDate } from '@/lib/date';
+import { sanitizeDecimal, sanitizeInt } from '@/lib/num';
 import { PREVIEW_MODE, previewCardio, previewSets } from '@/lib/preview';
 import { requireUserId, supabase } from '@/lib/supabase';
 import type { BodyPart, Unit, WorkoutSet } from '@/lib/types';
@@ -219,9 +220,10 @@ function StrengthLog({ id, name }: { id: string; name?: string }) {
                 </ThemedText>
               </Pressable>
               <TextInput
-                keyboardType="numeric"
+                keyboardType="decimal-pad"
+                inputMode="decimal"
                 value={row.weight}
-                onChangeText={(t) => updateRow(i, 'weight', t)}
+                onChangeText={(t) => updateRow(i, 'weight', sanitizeDecimal(t))}
                 placeholder="0"
                 placeholderTextColor={theme.textSecondary}
                 style={[styles.stepInput, { color: theme.text, backgroundColor: theme.background, borderColor: theme.border }]}
@@ -239,9 +241,10 @@ function StrengthLog({ id, name }: { id: string; name?: string }) {
           <View style={{ flex: 1 }}>
             <Field
               label="Reps"
-              keyboardType="numeric"
+              keyboardType="number-pad"
+              inputMode="numeric"
               value={row.reps}
-              onChangeText={(t) => updateRow(i, 'reps', t)}
+              onChangeText={(t) => updateRow(i, 'reps', sanitizeInt(t))}
               placeholder="—"
             />
           </View>
@@ -411,9 +414,10 @@ function CardioLog({ id, name }: { id: string; name?: string }) {
       <Card style={{ gap: Spacing.three }}>
         <Field
           label="Incline (%)"
-          keyboardType="numeric"
+          keyboardType="decimal-pad"
+          inputMode="decimal"
           value={incline}
-          onChangeText={setIncline}
+          onChangeText={(t) => setIncline(sanitizeDecimal(t))}
           placeholder="0"
         />
         <View style={styles.headerRow}>
@@ -433,9 +437,10 @@ function CardioLog({ id, name }: { id: string; name?: string }) {
         </View>
         <Field
           label={`Speed (${speedUnit === 'kmph' ? 'km/h' : 'mph'})`}
-          keyboardType="numeric"
+          keyboardType="decimal-pad"
+          inputMode="decimal"
           value={speed}
-          onChangeText={setSpeed}
+          onChangeText={(t) => setSpeed(sanitizeDecimal(t))}
           placeholder="0"
         />
       </Card>

@@ -9,15 +9,22 @@ import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { useAuth } from '@/lib/auth';
 import { bmiCategory, computeBmi } from '@/lib/bmi';
+import { sanitizeDecimal, sanitizeInt } from '@/lib/num';
 import { PREVIEW_MODE, previewProfile } from '@/lib/preview';
 import { requireUserId, supabase } from '@/lib/supabase';
 import type { Profile, Unit } from '@/lib/types';
 import { fromKg, round1, toKg } from '@/lib/units';
 
+type Gender = 'male' | 'female' | 'other';
+
 export default function ProfileScreen() {
   const theme = useTheme();
   const { session, signOut } = useAuth();
   const [unit, setUnit] = useState<Unit>('kg');
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [age, setAge] = useState('');
+  const [sex, setSex] = useState<Gender | null>(null);
   const [heightCm, setHeightCm] = useState('');
   const [weightInput, setWeightInput] = useState(''); // shown in current unit
   const [loading, setLoading] = useState(true);
@@ -31,6 +38,10 @@ export default function ProfileScreen() {
     if (data) {
       const p = data as Profile;
       setUnit(p.unit_pref ?? 'kg');
+      setFirstName(p.first_name ?? '');
+      setLastName(p.last_name ?? '');
+      setAge(p.age != null ? String(p.age) : '');
+      setSex(p.sex ?? null);
       setHeightCm(p.height_cm ? String(p.height_cm) : '');
       setWeightInput(
         p.weight_kg != null ? String(round1(fromKg(p.weight_kg, p.unit_pref ?? 'kg'))) : '',
@@ -80,6 +91,10 @@ export default function ProfileScreen() {
     }
     const { error } = await supabase.from('profiles').upsert({
       user_id: userId,
+      first_name: firstName.trim() || null,
+      last_name: lastName.trim() || null,
+      age: age !== '' ? Number(age) : null,
+      sex,
       height_cm: heightNum,
       weight_kg: weightKg,
       unit_pref: unit,
@@ -132,6 +147,57 @@ export default function ProfileScreen() {
           {session?.user.email}
         </ThemedText>
 
+        <Card style={{ gap: Spacing.three }}>
+          <ThemedText type="smallBold" themeColor="textSecondary">
+            YOUR DETAILS
+          </ThemedText>
+          <View style={styles.nameRow}>
+            <View style={{ flex: 1 }}>
+              <Field
+                label="First name"
+                value={firstName}
+                onChangeText={setFirstName}
+                editable={!loading}
+                placeholder="Alex"
+                autoCapitalize="words"
+              />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Field
+                label="Last name"
+                value={lastName}
+                onChangeText={setLastName}
+                editable={!loading}
+                placeholder="Carter"
+                autoCapitalize="words"
+              />
+            </View>
+          </View>
+          <Field
+            label="Age"
+            keyboardType="number-pad"
+            inputMode="numeric"
+            value={age}
+            onChangeText={(t) => setAge(sanitizeInt(t))}
+            editable={!loading}
+            placeholder="28"
+          />
+          <View style={{ gap: Spacing.one }}>
+            <ThemedText type="small" themeColor="textSecondary">
+              Gender
+            </ThemedText>
+            <SegmentedControl<Gender>
+              value={(sex ?? '') as Gender}
+              onChange={setSex}
+              options={[
+                { label: 'Male', value: 'male' },
+                { label: 'Female', value: 'female' },
+                { label: 'Other', value: 'other' },
+              ]}
+            />
+          </View>
+        </Card>
+
         <Card style={{ alignItems: 'center', gap: Spacing.one }}>
           <ThemedText type="small" themeColor="textSecondary">
             BODY MASS INDEX
@@ -164,17 +230,19 @@ export default function ProfileScreen() {
           />
           <Field
             label="Height (cm)"
-            keyboardType="numeric"
+            keyboardType="decimal-pad"
+            inputMode="decimal"
             value={heightCm}
-            onChangeText={setHeightCm}
+            onChangeText={(t) => setHeightCm(sanitizeDecimal(t))}
             editable={!loading}
             placeholder="175"
           />
           <Field
             label={`Weight (${unit})`}
-            keyboardType="numeric"
+            keyboardType="decimal-pad"
+            inputMode="decimal"
             value={weightInput}
-            onChangeText={setWeightInput}
+            onChangeText={(t) => setWeightInput(sanitizeDecimal(t))}
             editable={!loading}
             placeholder={unit === 'kg' ? '70' : '154'}
           />
@@ -192,4 +260,5 @@ export default function ProfileScreen() {
 const styles = StyleSheet.create({
   content: { padding: Spacing.three, gap: Spacing.three, paddingBottom: Spacing.six },
   titleRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
+  nameRow: { flexDirection: 'row', gap: Spacing.two },
 });

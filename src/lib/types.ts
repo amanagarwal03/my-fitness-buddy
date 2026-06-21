@@ -17,6 +17,9 @@ export type BodyPart = (typeof BODY_PARTS)[number];
 
 export type Profile = {
   user_id: string;
+  first_name: string | null;
+  last_name: string | null;
+  age: number | null;
   height_cm: number | null;
   weight_kg: number | null;
   unit_pref: Unit;

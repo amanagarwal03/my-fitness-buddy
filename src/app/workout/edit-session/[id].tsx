@@ -8,6 +8,7 @@ import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { BODY_PART_META } from '@/lib/bodyparts';
 import { isoDate } from '@/lib/date';
+import { sanitizeDecimal, sanitizeInt } from '@/lib/num';
 import { takePendingExercise } from '@/lib/pendingExercise';
 import { requireUserId, supabase } from '@/lib/supabase';
 import type { BodyPart, Unit, WorkoutSet } from '@/lib/types';
@@ -300,8 +301,9 @@ export default function EditSessionScreen() {
                     </Pressable>
                     <TextInput
                       value={s.weight}
-                      onChangeText={(t) => updateSet(ex.key, i, 'weight', t)}
-                      keyboardType="numeric"
+                      onChangeText={(t) => updateSet(ex.key, i, 'weight', sanitizeDecimal(t))}
+                      keyboardType="decimal-pad"
+                      inputMode="decimal"
                       placeholder="0"
                       placeholderTextColor={theme.textSecondary}
                       style={[styles.cellInput, styles.weightInput, { color: theme.text, borderColor: theme.border }]}
@@ -317,8 +319,9 @@ export default function EditSessionScreen() {
                   </View>
                   <TextInput
                     value={s.reps}
-                    onChangeText={(t) => updateSet(ex.key, i, 'reps', t)}
-                    keyboardType="numeric"
+                    onChangeText={(t) => updateSet(ex.key, i, 'reps', sanitizeInt(t))}
+                    keyboardType="number-pad"
+                    inputMode="numeric"
                     placeholder="0"
                     placeholderTextColor={theme.textSecondary}
                     style={[styles.cellInput, styles.colReps, { color: theme.text, borderColor: theme.border }]}

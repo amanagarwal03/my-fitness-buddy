@@ -76,10 +76,13 @@ export const previewMeals: Meal[] = [
 
 export const previewProfile: Profile = {
   user_id: 'preview',
+  first_name: 'Alex',
+  last_name: 'Carter',
+  age: 28,
   height_cm: 178,
   weight_kg: 74,
   unit_pref: 'kg',
-  sex: null,
+  sex: 'male',
   dob: null,
   updated_at: now.toISOString(),
 };

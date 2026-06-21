@@ -158,7 +158,14 @@ export default function SharedProfileScreen() {
   );
   const bmi =
     profile?.height_cm && profile?.weight_kg ? computeBmi(profile.height_cm, profile.weight_kg) : null;
-  const initial = (label.trim()[0] ?? '?').toUpperCase();
+  // Prefer the person's real name; fall back to the share label (their email).
+  const fullName = [profile?.first_name, profile?.last_name].filter(Boolean).join(' ').trim();
+  const displayName = fullName || label;
+  const genderLabel = profile?.sex ? profile.sex.charAt(0).toUpperCase() + profile.sex.slice(1) : null;
+  const identitySub = [profile?.age != null ? `${profile.age} yrs` : null, genderLabel]
+    .filter(Boolean)
+    .join('  ·  ');
+  const initial = (displayName.trim()[0] ?? '?').toUpperCase();
   const hasWorkout = daySessions.length > 0 || manualGroups.length > 0;
 
   return (
@@ -172,8 +179,13 @@ export default function SharedProfileScreen() {
           </View>
           <View style={{ flex: 1, gap: Spacing.one }}>
             <ThemedText type="subtitle" numberOfLines={1}>
-              {label}
+              {displayName}
             </ThemedText>
+            {identitySub ? (
+              <ThemedText type="small" themeColor="textSecondary">
+                {identitySub}
+              </ThemedText>
+            ) : null}
             <View style={[styles.pill, { backgroundColor: theme.backgroundSelected }]}>
               <View style={[styles.dot, { backgroundColor: theme.success }]} />
               <ThemedText type="small" themeColor="textSecondary">

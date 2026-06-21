@@ -14,6 +14,7 @@ import {
 } from '@/lib/activeWorkout';
 import { useAuth } from '@/lib/auth';
 import { formatDuration, isoDate } from '@/lib/date';
+import { sanitizeDecimal, sanitizeInt } from '@/lib/num';
 import { takePendingExercise } from '@/lib/pendingExercise';
 import { PREVIEW_MODE } from '@/lib/preview';
 import { requireUserId, supabase } from '@/lib/supabase';
@@ -402,8 +403,9 @@ export default function LogWorkoutScreen() {
                   </Pressable>
                   <TextInput
                     value={s.weight}
-                    onChangeText={(t) => updateSet(ex.key, i, 'weight', t)}
-                    keyboardType="numeric"
+                    onChangeText={(t) => updateSet(ex.key, i, 'weight', sanitizeDecimal(t))}
+                    keyboardType="decimal-pad"
+                    inputMode="decimal"
                     placeholder={s.prevKg != null ? String(round1(fromKg(s.prevKg, unit))) : '0'}
                     placeholderTextColor={theme.textSecondary}
                     style={[styles.cellInput, styles.weightInput, { color: theme.text, borderColor: theme.border }]}
@@ -419,8 +421,9 @@ export default function LogWorkoutScreen() {
                 </View>
                 <TextInput
                   value={s.reps}
-                  onChangeText={(t) => updateSet(ex.key, i, 'reps', t)}
-                  keyboardType="numeric"
+                  onChangeText={(t) => updateSet(ex.key, i, 'reps', sanitizeInt(t))}
+                  keyboardType="number-pad"
+                  inputMode="numeric"
                   placeholder={s.prevReps != null ? String(s.prevReps) : '0'}
                   placeholderTextColor={theme.textSecondary}
                   style={[styles.cellInput, styles.colReps, { color: theme.text, borderColor: theme.border }]}
