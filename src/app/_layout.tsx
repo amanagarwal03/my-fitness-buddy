@@ -71,6 +71,7 @@ function RootNavigator() {
         <Stack.Screen name="workout/[bodyPart]" options={{ headerShown: true }} />
         <Stack.Screen name="workout/exercise/[id]" options={{ headerShown: true }} />
         <Stack.Screen name="workout/progress/[id]" options={{ headerShown: true }} />
+        <Stack.Screen name="workout/edit-session/[id]" options={{ headerShown: true }} />
       </Stack>
     </ThemeProvider>
   );

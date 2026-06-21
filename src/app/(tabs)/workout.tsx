@@ -262,6 +262,7 @@ export default function WorkoutScreen() {
             session={s}
             groups={sessionGroups[s.id] ?? []}
             unit={unit}
+            onEdit={() => router.push({ pathname: '/workout/edit-session/[id]', params: { id: s.id } })}
             onDelete={() => deleteSession(s)}
           />
         ))}
@@ -378,12 +379,14 @@ function SessionCard({
   session,
   groups,
   unit,
+  onEdit,
   onDelete,
 }: {
   index: number;
   session: WorkoutSession;
   groups: ExerciseGroup[];
   unit: Unit;
+  onEdit: () => void;
   onDelete: () => void;
 }) {
   const theme = useTheme();
@@ -423,10 +426,15 @@ function SessionCard({
       </View>
 
       <View style={[styles.sessionMeta, { borderTopColor: theme.border }]}>
-        <ThemedText type="small" themeColor="textSecondary">
+        <ThemedText type="small" themeColor="textSecondary" style={{ flex: 1 }}>
           {groups.length} {groups.length === 1 ? 'exercise' : 'exercises'} · {totalSets}{' '}
           {totalSets === 1 ? 'set' : 'sets'}
         </ThemedText>
+        <Pressable onPress={onEdit} hitSlop={8} style={[styles.editBtn, { borderColor: theme.border }]}>
+          <ThemedText type="small" themeColor="primary" style={{ fontWeight: '700' }}>
+            ✎ Edit
+          </ThemedText>
+        </Pressable>
       </View>
 
       {groups.length === 0 ? (
@@ -562,9 +570,17 @@ const styles = StyleSheet.create({
   sessionBadgeText: { color: '#fff', fontSize: 16, fontWeight: '800' },
   durationPill: { paddingHorizontal: Spacing.two + 2, paddingVertical: Spacing.one, borderRadius: 999 },
   sessionMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
     borderTopWidth: StyleSheet.hairlineWidth,
     marginTop: Spacing.two,
     paddingTop: Spacing.two,
+  },
+  editBtn: {
+    paddingHorizontal: Spacing.two + 2,
+    paddingVertical: Spacing.one,
+    borderRadius: 999,
+    borderWidth: StyleSheet.hairlineWidth,
   },
   exBlock: { flexDirection: 'row', gap: Spacing.two, marginTop: Spacing.three },
   exAccent: { width: 4, borderRadius: 2, alignSelf: 'stretch' },
