@@ -1,6 +1,8 @@
 import { Stack, useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+
+import { showAlert } from '@/lib/dialog';
 
 import { StepperInput } from '@/components/stepper-input';
 import { ThemedText } from '@/components/themed-text';
@@ -309,25 +311,25 @@ export default function LogWorkoutScreen() {
   const finish = async () => {
     const done = exercises.flatMap((ex) => ex.sets.filter((s) => s.done).map((s) => ({ ex, s })));
     if (done.length === 0) {
-      Alert.alert('Nothing to save', 'Mark at least one set as done (the ✓), or discard the workout.');
+      showAlert('Nothing to save', 'Mark at least one set as done (the ✓), or discard the workout.');
       return;
     }
     for (const { ex, s } of done) {
       if (ex.kind === 'strength' && !(Number(s.reps) > 0)) {
-        Alert.alert('Add your reps', `Every completed set of ${ex.name} needs a rep count greater than 0.`);
+        showAlert('Add your reps', `Every completed set of ${ex.name} needs a rep count greater than 0.`);
         return;
       }
       if (ex.kind === 'duration' && !(s.durationSec > 0)) {
-        Alert.alert('Add a duration', `Set a hold time for ${ex.name}.`);
+        showAlert('Add a duration', `Set a hold time for ${ex.name}.`);
         return;
       }
       if (ex.kind === 'cardio' && !(s.durationSec > 0 || Number(s.speed) > 0)) {
-        Alert.alert('Add your run', `Enter a duration or speed for ${ex.name}.`);
+        showAlert('Add your run', `Enter a duration or speed for ${ex.name}.`);
         return;
       }
     }
     if (PREVIEW_MODE) {
-      Alert.alert('Preview mode', 'Connect Supabase to save workouts.');
+      showAlert('Preview mode', 'Connect Supabase to save workouts.');
       return;
     }
     if (!auth) return;
@@ -337,7 +339,7 @@ export default function LogWorkoutScreen() {
       userId = await requireUserId();
     } catch (e) {
       setSaving(false);
-      Alert.alert('Could not save', (e as Error).message);
+      showAlert('Could not save', (e as Error).message);
       return;
     }
     const durationSeconds = liveElapsed({ elapsedBeforePause, runningSince });
@@ -353,7 +355,7 @@ export default function LogWorkoutScreen() {
       .single();
     if (error || !sess) {
       setSaving(false);
-      Alert.alert('Could not save', error?.message ?? 'Please try again.');
+      showAlert('Could not save', error?.message ?? 'Please try again.');
       return;
     }
     const today = isoDate();
@@ -390,7 +392,7 @@ export default function LogWorkoutScreen() {
       const { error: e2 } = await supabase.from('workout_sets').insert(rows);
       if (e2) {
         setSaving(false);
-        Alert.alert('Could not save sets', e2.message);
+        showAlert('Could not save sets', e2.message);
         return;
       }
     }
@@ -408,7 +410,7 @@ export default function LogWorkoutScreen() {
       doDiscard();
       return;
     }
-    Alert.alert('Discard workout?', 'This workout won’t be saved.', [
+    showAlert('Discard workout?', 'This workout won’t be saved.', [
       { text: 'Keep editing', style: 'cancel' },
       { text: 'Discard', style: 'destructive', onPress: doDiscard },
     ]);

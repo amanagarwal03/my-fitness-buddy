@@ -1,6 +1,8 @@
 import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, View } from 'react-native';
+import { ScrollView, StyleSheet, View } from 'react-native';
+
+import { showAlert } from '@/lib/dialog';
 
 import { StepperInput } from '@/components/stepper-input';
 import { ThemedText } from '@/components/themed-text';
@@ -132,7 +134,7 @@ function StrengthLog({ id, name }: { id: string; name?: string }) {
 
   const save = async () => {
     if (PREVIEW_MODE) {
-      Alert.alert('Preview mode', 'Connect Supabase to save your sets.');
+      showAlert('Preview mode', 'Connect Supabase to save your sets.');
       return;
     }
     if (!auth || !id) return;
@@ -140,7 +142,7 @@ function StrengthLog({ id, name }: { id: string; name?: string }) {
     try {
       userId = await requireUserId();
     } catch (e) {
-      Alert.alert('Could not save', (e as Error).message);
+      showAlert('Could not save', (e as Error).message);
       return;
     }
     const today = isoDate();
@@ -150,11 +152,11 @@ function StrengthLog({ id, name }: { id: string; name?: string }) {
       .filter(({ r }) => r.weight !== '' && Number.isFinite(Number(r.weight)));
 
     if (rowsToSave.length === 0) {
-      Alert.alert('Nothing to save', 'Enter a weight for at least one set.');
+      showAlert('Nothing to save', 'Enter a weight for at least one set.');
       return;
     }
     if (rowsToSave.some(({ r }) => !(Number(r.reps) > 0))) {
-      Alert.alert('Add your reps', 'Every set needs a rep count greater than 0.');
+      showAlert('Add your reps', 'Every set needs a rep count greater than 0.');
       return;
     }
 
@@ -181,10 +183,10 @@ function StrengthLog({ id, name }: { id: string; name?: string }) {
     const { error } = await supabase.from('workout_sets').insert(toInsert);
     setSaving(false);
     if (error) {
-      Alert.alert('Could not save', error.message);
+      showAlert('Could not save', error.message);
       return;
     }
-    Alert.alert('Saved', 'Your sets have been logged.');
+    showAlert('Saved', 'Your sets have been logged.');
   };
 
   return (
@@ -347,20 +349,20 @@ function CardioLog({ id, name }: { id: string; name?: string }) {
 
   const save = async () => {
     if (PREVIEW_MODE) {
-      Alert.alert('Preview mode', 'Connect Supabase to save this run.');
+      showAlert('Preview mode', 'Connect Supabase to save this run.');
       return;
     }
     if (!auth || !id) return;
     const durationSeconds = Math.round(elapsed());
     if (durationSeconds === 0 && speed === '' && incline === '') {
-      Alert.alert('Nothing to save', 'Run the timer or enter speed/incline first.');
+      showAlert('Nothing to save', 'Run the timer or enter speed/incline first.');
       return;
     }
     let userId: string;
     try {
       userId = await requireUserId();
     } catch (e) {
-      Alert.alert('Could not save', (e as Error).message);
+      showAlert('Could not save', (e as Error).message);
       return;
     }
     const today = isoDate();
@@ -387,10 +389,10 @@ function CardioLog({ id, name }: { id: string; name?: string }) {
     });
     setSaving(false);
     if (error) {
-      Alert.alert('Could not save', error.message);
+      showAlert('Could not save', error.message);
       return;
     }
-    Alert.alert('Saved', 'Your run has been logged.');
+    showAlert('Saved', 'Your run has been logged.');
   };
 
   // Live distance + calorie estimate from the current entry.

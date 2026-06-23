@@ -1,7 +1,7 @@
 import * as Linking from 'expo-linking';
 import { useRouter } from 'expo-router';
 import { useRef, useState } from 'react';
-import { Alert, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
 import { Button, Field } from '@/components/ui';
@@ -20,6 +20,8 @@ export default function ResetPasswordScreen() {
   const [confirm, setConfirm] = useState('');
   const [loading, setLoading] = useState(false);
   const [sent, setSent] = useState(false);
+  // Inline feedback (Alert.alert does not render on the web build).
+  const [notice, setNotice] = useState<{ kind: 'info' | 'error'; text: string } | null>(null);
   const scrollRef = useRef<ScrollView>(null);
 
   const handleFieldFocus = () => {
@@ -31,8 +33,9 @@ export default function ResetPasswordScreen() {
   const updateMode = recovering;
 
   const sendReset = async () => {
+    setNotice(null);
     if (!email.trim()) {
-      Alert.alert('Enter your email', 'We’ll send a reset link to this address.');
+      setNotice({ kind: 'error', text: 'Enter your account email first.' });
       return;
     }
     setLoading(true);
@@ -41,30 +44,31 @@ export default function ResetPasswordScreen() {
     });
     setLoading(false);
     if (error) {
-      Alert.alert('Could not send', error.message);
+      setNotice({ kind: 'error', text: error.message });
       return;
     }
     setSent(true);
   };
 
   const updatePassword = async () => {
+    setNotice(null);
     if (password.length < 6) {
-      Alert.alert('Too short', 'Password must be at least 6 characters.');
+      setNotice({ kind: 'error', text: 'Password must be at least 6 characters.' });
       return;
     }
     if (password !== confirm) {
-      Alert.alert('Passwords don’t match', 'Please re-enter the same password.');
+      setNotice({ kind: 'error', text: 'Passwords don’t match — please re-enter the same one.' });
       return;
     }
     setLoading(true);
     const { error } = await supabase.auth.updateUser({ password });
     setLoading(false);
     if (error) {
-      Alert.alert('Could not update', error.message);
+      setNotice({ kind: 'error', text: error.message });
       return;
     }
+    // Success: ending recovery flips the auth gate, which navigates onward.
     endRecovery();
-    Alert.alert('Password updated', 'You’re signed in with your new password.');
   };
 
   return (
@@ -79,6 +83,21 @@ export default function ResetPasswordScreen() {
           <View style={styles.iconWrap}>
             <ThemedText style={{ fontSize: 40 }}>🔐</ThemedText>
           </View>
+
+          {notice ? (
+            <View
+              style={[
+                styles.notice,
+                {
+                  backgroundColor: (notice.kind === 'error' ? theme.danger : theme.success) + '18',
+                  borderColor: (notice.kind === 'error' ? theme.danger : theme.success) + '55',
+                },
+              ]}>
+              <ThemedText type="small" style={{ color: notice.kind === 'error' ? theme.danger : theme.text }}>
+                {notice.text}
+              </ThemedText>
+            </View>
+          ) : null}
 
           {updateMode ? (
             <>
@@ -152,4 +171,9 @@ const styles = StyleSheet.create({
   scroll: { flexGrow: 1, justifyContent: 'center', padding: Spacing.four, gap: Spacing.three },
   iconWrap: { alignItems: 'center', marginBottom: Spacing.two },
   center: { textAlign: 'center' },
+  notice: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: Spacing.two,
+    padding: Spacing.three,
+  },
 });

@@ -1,12 +1,13 @@
 import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { Alert, Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
 import { Button, Card, Field, Screen } from '@/components/ui';
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { useAuth } from '@/lib/auth';
+import { showAlert } from '@/lib/dialog';
 import { PREVIEW_MODE, previewExercises } from '@/lib/preview';
 import { requireUserId, supabase } from '@/lib/supabase';
 import type { BodyPart, Exercise } from '@/lib/types';
@@ -65,7 +66,7 @@ export default function BodyPartScreen() {
     try {
       userId = await requireUserId();
     } catch (e) {
-      Alert.alert('Could not add', (e as Error).message);
+      showAlert('Could not add', (e as Error).message);
       return;
     }
     const { error } = await supabase.from('exercises').insert({
@@ -75,7 +76,7 @@ export default function BodyPartScreen() {
       is_custom: true,
     });
     if (error) {
-      Alert.alert('Could not add', error.message);
+      showAlert('Could not add', error.message);
       return;
     }
     setNewName('');

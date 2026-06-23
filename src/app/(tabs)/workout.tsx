@@ -1,7 +1,9 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+
+import { showAlert } from '@/lib/dialog';
 
 import { CollapsibleCalendar } from '@/components/calendar';
 import { MenuButton } from '@/components/side-nav';
@@ -150,7 +152,7 @@ export default function WorkoutScreen() {
   );
 
   const discardActive = () => {
-    Alert.alert('Discard in-progress workout?', 'This clears the workout you started.', [
+    showAlert('Discard in-progress workout?', 'This clears the workout you started.', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Discard',
@@ -174,7 +176,7 @@ export default function WorkoutScreen() {
       loadDay();
       loadMarks();
     };
-    Alert.alert('Delete session?', 'This removes the session, its duration, and all its sets.', [
+    showAlert('Delete session?', 'This removes the session, its duration, and all its sets.', [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Delete', style: 'destructive', onPress: remove },
     ]);
@@ -195,7 +197,7 @@ export default function WorkoutScreen() {
       loadDay();
       loadMarks();
     };
-    Alert.alert('Clear log?', `Remove the quick log for ${g.name} on ${dayLabel(selectedDate)}?`, [
+    showAlert('Clear log?', `Remove the quick log for ${g.name} on ${dayLabel(selectedDate)}?`, [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Clear', style: 'destructive', onPress: remove },
     ]);

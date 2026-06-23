@@ -1,11 +1,12 @@
 import { useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { Alert, ScrollView, StyleSheet } from 'react-native';
+import { ScrollView, StyleSheet } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
 import { Button, Card, Field, Screen } from '@/components/ui';
 import { Spacing } from '@/constants/theme';
 import { useAuth } from '@/lib/auth';
+import { showAlert } from '@/lib/dialog';
 import { requireUserId, supabase } from '@/lib/supabase';
 import type { NutritionGoals } from '@/lib/types';
 
@@ -44,7 +45,7 @@ export default function GoalsScreen() {
     const carbs_g = Number(form.carbs_g);
     const fat_g = Number(form.fat_g);
     if ([calories, protein_g, carbs_g, fat_g].some((n) => !Number.isFinite(n) || n < 0)) {
-      Alert.alert('Invalid values', 'Please enter non-negative numbers for all goals.');
+      showAlert('Invalid values', 'Please enter non-negative numbers for all goals.');
       return;
     }
     setSaving(true);
@@ -53,7 +54,7 @@ export default function GoalsScreen() {
       userId = await requireUserId();
     } catch (e) {
       setSaving(false);
-      Alert.alert('Could not save', (e as Error).message);
+      showAlert('Could not save', (e as Error).message);
       return;
     }
     const { error } = await supabase.from('nutrition_goals').upsert({
@@ -65,7 +66,7 @@ export default function GoalsScreen() {
     });
     setSaving(false);
     if (error) {
-      Alert.alert('Could not save', error.message);
+      showAlert('Could not save', error.message);
       return;
     }
     router.back();

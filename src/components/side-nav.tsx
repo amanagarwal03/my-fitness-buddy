@@ -1,6 +1,8 @@
 import { useRouter } from 'expo-router';
 import { createContext, useCallback, useContext, useState, type ReactNode } from 'react';
-import { Alert, Modal, Pressable, StyleSheet, View } from 'react-native';
+import { Modal, Pressable, StyleSheet, View } from 'react-native';
+
+import { showAlert } from '@/lib/dialog';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
@@ -63,7 +65,7 @@ export function SideNavProvider({ children }: { children: ReactNode }) {
       label: 'Connect apps',
       emoji: '⌚️',
       onPress: () =>
-        Alert.alert(
+        showAlert(
           'Coming soon',
           'Google Fit, Apple Health / Watch and Strava need a custom build of the app — they’re on the roadmap.',
         ),

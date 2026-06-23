@@ -1,6 +1,8 @@
 import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+
+import { showAlert } from '@/lib/dialog';
 
 import { StepperInput } from '@/components/stepper-input';
 import { ThemedText } from '@/components/themed-text';
@@ -179,7 +181,7 @@ export default function EditSessionScreen() {
       (ex) => ex.bodyPart !== 'cardio' && ex.sets.some((s) => !(Number(s.reps) > 0)),
     );
     if (hasZeroReps) {
-      Alert.alert('Add your reps', 'Every set needs a rep count greater than 0.');
+      showAlert('Add your reps', 'Every set needs a rep count greater than 0.');
       return;
     }
     setSaving(true);
@@ -188,7 +190,7 @@ export default function EditSessionScreen() {
       userId = await requireUserId();
     } catch (e) {
       setSaving(false);
-      Alert.alert('Could not save', (e as Error).message);
+      showAlert('Could not save', (e as Error).message);
       return;
     }
     // Rebuild the session's sets from scratch: number them per-exercise and keep
@@ -215,14 +217,14 @@ export default function EditSessionScreen() {
       .eq('user_id', userId);
     if (delErr) {
       setSaving(false);
-      Alert.alert('Could not save', delErr.message);
+      showAlert('Could not save', delErr.message);
       return;
     }
     if (rows.length) {
       const { error: insErr } = await supabase.from('workout_sets').insert(rows);
       if (insErr) {
         setSaving(false);
-        Alert.alert('Could not save', insErr.message);
+        showAlert('Could not save', insErr.message);
         return;
       }
     }

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Keyboard,
+  Platform,
   type NativeSyntheticEvent,
   type ScrollView,
   type TargetedEvent,
@@ -32,8 +33,13 @@ type KeyboardScrollResponder = {
 export function useKeyboardAwareScroll(extraOffset = 28) {
   const scrollRef = useRef<ScrollView>(null);
   const [keyboardSpacerHeight, setKeyboardSpacerHeight] = useState(0);
+  // On web there is no RN soft keyboard, and mobile browsers already scroll the
+  // focused input into view. Our manual scrolling fights the browser (causing
+  // jank / the page auto-scrolling away from the field), so disable it on web.
+  const isWeb = Platform.OS === 'web';
 
   useEffect(() => {
+    if (isWeb) return;
     const show = Keyboard.addListener('keyboardDidShow', (e) =>
       setKeyboardSpacerHeight(e.endCoordinates.height),
     );
@@ -42,10 +48,11 @@ export function useKeyboardAwareScroll(extraOffset = 28) {
       show.remove();
       hide.remove();
     };
-  }, []);
+  }, [isWeb]);
 
   const handleInputFocus = useCallback(
     (e: NativeSyntheticEvent<TargetedEvent>) => {
+      if (isWeb) return;
       const node = e.nativeEvent.target;
       if (node == null) return;
       // Delay so the keyboard frame is registered first (Android only emits
@@ -57,7 +64,7 @@ export function useKeyboardAwareScroll(extraOffset = 28) {
         responder?.scrollResponderScrollNativeHandleToKeyboard?.(node, extraOffset, true);
       }, 80);
     },
-    [extraOffset],
+    [extraOffset, isWeb],
   );
 
   return { scrollRef, handleInputFocus, keyboardSpacerHeight };

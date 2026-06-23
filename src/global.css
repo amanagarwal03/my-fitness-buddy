@@ -7,3 +7,20 @@
   --font-rounded: 'SF Pro Rounded', 'Hiragino Maru Gothic ProN', Meiryo, 'MS PGothic', sans-serif;
   --font-serif: Georgia, 'Times New Roman', serif;
 }
+
+/* Web only: paint the page background to match the app theme so no white strip
+   shows through below the content / tab bar (and during overscroll on mobile). */
+html,
+body,
+#root {
+  margin: 0;
+  min-height: 100%;
+  background-color: #ffffff;
+}
+@media (prefers-color-scheme: dark) {
+  html,
+  body,
+  #root {
+    background-color: #0b0c0e;
+  }
+}

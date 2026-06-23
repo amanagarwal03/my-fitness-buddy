@@ -1,6 +1,8 @@
 import { Stack, useRouter } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, Modal, Pressable, ScrollView, SectionList, StyleSheet, TextInput, View } from 'react-native';
+import { Modal, Pressable, ScrollView, SectionList, StyleSheet, TextInput, View } from 'react-native';
+
+import { showAlert } from '@/lib/dialog';
 
 import { ThemedText } from '@/components/themed-text';
 import { Button, Screen } from '@/components/ui';
@@ -54,7 +56,7 @@ export default function AddExerciseScreen() {
   // Open the inline create form (works on all platforms, unlike Alert.prompt).
   const openCustom = () => {
     if (filter === 'all') {
-      Alert.alert('Pick a muscle group', 'Tap a muscle group above first, then add your exercise.');
+      showAlert('Pick a muscle group', 'Tap a muscle group above first, then add your exercise.');
       return;
     }
     setCustomName(q.trim());
@@ -74,7 +76,7 @@ export default function AddExerciseScreen() {
     const name = (nameArg ?? q).trim();
     if (!name) return;
     if (filter === 'all') {
-      Alert.alert('Pick a muscle group', 'Tap a muscle group above first, then create your exercise.');
+      showAlert('Pick a muscle group', 'Tap a muscle group above first, then create your exercise.');
       return;
     }
     const bp = filter;
@@ -86,7 +88,7 @@ export default function AddExerciseScreen() {
     try {
       userId = await requireUserId();
     } catch (e) {
-      Alert.alert('Could not create', (e as Error).message);
+      showAlert('Could not create', (e as Error).message);
       return;
     }
     const { data, error } = await supabase
@@ -95,7 +97,7 @@ export default function AddExerciseScreen() {
       .select('*')
       .single();
     if (error || !data) {
-      Alert.alert('Could not create', error?.message ?? 'Please try again.');
+      showAlert('Could not create', error?.message ?? 'Please try again.');
       return;
     }
     pick(data as Exercise);

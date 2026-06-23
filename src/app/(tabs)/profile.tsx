@@ -1,7 +1,9 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Switch, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Switch, View } from 'react-native';
+
+import { showAlert } from '@/lib/dialog';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useSideNav } from '@/components/side-nav';
@@ -200,10 +202,10 @@ export default function ProfileScreen() {
 
   const deleteAccount = () => {
     if (PREVIEW_MODE) {
-      Alert.alert('Preview mode', 'Connect Supabase to manage your account.');
+      showAlert('Preview mode', 'Connect Supabase to manage your account.');
       return;
     }
-    Alert.alert(
+    showAlert(
       'Delete account?',
       'This permanently deletes your account and all your data — meals, photos, workouts, and sharing. This cannot be undone.',
       [
@@ -216,7 +218,7 @@ export default function ProfileScreen() {
             const { error } = await supabase.rpc('delete_my_account');
             setDeleting(false);
             if (error) {
-              Alert.alert('Could not delete', error.message);
+              showAlert('Could not delete', error.message);
               return;
             }
             await signOut();

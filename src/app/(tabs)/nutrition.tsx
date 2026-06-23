@@ -2,7 +2,6 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Modal,
   Pressable,
   RefreshControl,
@@ -20,9 +19,11 @@ import { Card, ProgressBar, Screen } from '@/components/ui';
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { useAuth } from '@/lib/auth';
+import { showAlert } from '@/lib/dialog';
 import { analyzeMeal } from '@/lib/analyzeMeal';
 import { isoDate } from '@/lib/date';
 import { captureFromCamera, pickFromLibrary } from '@/lib/image';
+import { setPendingMealImage } from '@/lib/pendingMeal';
 import { PREVIEW_MODE, previewGoals, previewMeals } from '@/lib/preview';
 import { pruneOldPhotos, signedPhotoUrls } from '@/lib/storage';
 import { supabase } from '@/lib/supabase';
@@ -147,7 +148,7 @@ export default function NutritionScreen() {
 
   const runAnalysis = async (source: 'camera' | 'library', mealType: MealType) => {
     if (PREVIEW_MODE) {
-      Alert.alert('Preview mode', 'Connect Supabase to enable meal scanning. The UI flow is ready.');
+      showAlert('Preview mode', 'Connect Supabase to enable meal scanning. The UI flow is ready.');
       return;
     }
     try {
@@ -156,13 +157,16 @@ export default function NutritionScreen() {
       setBusy('Analyzing your meal…');
       const analysis = await analyzeMeal(img.base64, 'image/jpeg');
       setBusy(null);
+      // Hand the photo off via a module holder (not a route param) — on web the
+      // URI is a large data: URL that would break navigation if put in the URL.
+      setPendingMealImage(img);
       router.push({
         pathname: '/result',
-        params: { analysis: JSON.stringify(analysis), imageUri: img.uri, mealType },
+        params: { analysis: JSON.stringify(analysis), mealType },
       });
     } catch (e) {
       setBusy(null);
-      Alert.alert('Could not analyze', e instanceof Error ? e.message : String(e));
+      showAlert('Could not analyze', e instanceof Error ? e.message : String(e));
     }
   };
 
@@ -173,7 +177,7 @@ export default function NutritionScreen() {
       setMeals((prev) => prev.filter((m) => m.id !== id));
       return;
     }
-    Alert.alert('Delete meal?', 'This removes it from the log.', [
+    showAlert('Delete meal?', 'This removes it from the log.', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Delete',

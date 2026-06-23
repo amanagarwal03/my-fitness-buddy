@@ -51,8 +51,8 @@ Start tracking in under a minute. My Fitness Buddy — your accountability partn
 - **Category:** Health & Fitness
 - **Tags:** fitness, nutrition, calorie counter, workout tracker, gym log
 - **Contact email:** bestaman03@gmail.com
-- **Website:** (optional — your hosted privacy policy page works here)
-- **Privacy policy URL:** ⬅️ PASTE YOUR HOSTED privacy-policy.html URL HERE
+- **Website:** https://myfitnessbuddypartner.netlify.app/ (optional)
+- **Privacy policy URL:** https://myfitnessbuddypartner.netlify.app/
 
 ---
 

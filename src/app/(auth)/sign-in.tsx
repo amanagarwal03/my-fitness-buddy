@@ -2,7 +2,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import * as Linking from 'expo-linking';
 import { useRouter } from 'expo-router';
 import { useRef, useState } from 'react';
-import { Alert, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { BrandLogo } from '@/components/brand-logo';
@@ -25,6 +25,10 @@ export default function SignInScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  // Inline feedback shown in the card. We use this instead of Alert.alert
+  // because Alert does not render a dialog on the web build.
+  const [notice, setNotice] = useState<{ kind: 'info' | 'error'; text: string } | null>(null);
+  const [showResend, setShowResend] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
 
   // When a field is focused, scroll the card up so it sits above the keyboard
@@ -35,25 +39,34 @@ export default function SignInScreen() {
 
   const emailRedirect = Linking.createURL('/sign-in');
 
+  const switchMode = (next: 'signIn' | 'signUp') => {
+    setMode(next);
+    setNotice(null);
+    setShowResend(false);
+  };
+
   const resendConfirmation = async () => {
     const { error } = await supabase.auth.resend({
       type: 'signup',
       email,
       options: { emailRedirectTo: emailRedirect },
     });
-    Alert.alert(
-      error ? 'Could not resend' : 'Confirmation sent',
-      error ? error.message : `We sent a new confirmation link to ${email}.`,
+    setNotice(
+      error
+        ? { kind: 'error', text: error.message }
+        : { kind: 'info', text: `We sent a new confirmation link to ${email}.` },
     );
   };
 
   const submit = async () => {
+    setNotice(null);
+    setShowResend(false);
     if (!isSupabaseConfigured) {
-      Alert.alert('Not configured', 'Add your Supabase keys to .env and restart the app.');
+      setNotice({ kind: 'error', text: 'App is not configured. Please try again later.' });
       return;
     }
     if (!email || !password) {
-      Alert.alert('Missing info', 'Enter both email and password.');
+      setNotice({ kind: 'error', text: 'Enter both your email and password.' });
       return;
     }
     setLoading(true);
@@ -66,26 +79,26 @@ export default function SignInScreen() {
         });
         if (error) throw error;
         if (!data.session) {
-          Alert.alert(
-            'Confirm your email',
-            `We sent a confirmation link to ${email}. Tap it to finish creating your account, then sign in.`,
-          );
           setMode('signIn');
+          setNotice({
+            kind: 'info',
+            text: `Almost there! We sent a confirmation link to ${email}. Open it, then sign in below.`,
+          });
+          setShowResend(true);
         }
+        // If a session exists, email confirmation is off and the auth gate
+        // navigates onward automatically.
       } else {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      // Friendlier handling for an unconfirmed account on sign-in.
       if (/not confirmed/i.test(msg)) {
-        Alert.alert('Email not confirmed', 'Please confirm your email first.', [
-          { text: 'OK', style: 'cancel' },
-          { text: 'Resend link', onPress: resendConfirmation },
-        ]);
+        setNotice({ kind: 'info', text: 'Please confirm your email first — check your inbox.' });
+        setShowResend(true);
       } else {
-        Alert.alert('Authentication error', msg);
+        setNotice({ kind: 'error', text: msg });
       }
     } finally {
       setLoading(false);
@@ -136,7 +149,7 @@ export default function SignInScreen() {
             ]}>
             <SegmentedControl<'signIn' | 'signUp'>
               value={mode}
-              onChange={setMode}
+              onChange={switchMode}
               options={[
                 { label: 'Sign in', value: 'signIn' },
                 { label: 'Sign up', value: 'signUp' },
@@ -153,6 +166,31 @@ export default function SignInScreen() {
                   : 'Start tracking in under a minute.'}
               </ThemedText>
             </View>
+
+            {notice ? (
+              <View
+                style={[
+                  styles.notice,
+                  {
+                    backgroundColor: (notice.kind === 'error' ? theme.danger : theme.success) + '18',
+                    borderColor: (notice.kind === 'error' ? theme.danger : theme.success) + '55',
+                  },
+                ]}>
+                <ThemedText
+                  type="small"
+                  style={{ color: notice.kind === 'error' ? theme.danger : theme.text }}>
+                  {notice.kind === 'info' ? '✅  ' : '⚠️  '}
+                  {notice.text}
+                </ThemedText>
+                {showResend ? (
+                  <Pressable onPress={resendConfirmation} hitSlop={8} style={{ marginTop: Spacing.one }}>
+                    <ThemedText type="smallBold" themeColor="primary">
+                      Resend confirmation email
+                    </ThemedText>
+                  </Pressable>
+                ) : null}
+              </View>
+            ) : null}
 
             <Field
               label="Email"
@@ -202,6 +240,11 @@ export default function SignInScreen() {
 
 const styles = StyleSheet.create({
   scroll: { paddingBottom: Spacing.six, flexGrow: 1 },
+  notice: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: Spacing.two,
+    padding: Spacing.three,
+  },
   hero: {
     borderBottomLeftRadius: 32,
     borderBottomRightRadius: 32,

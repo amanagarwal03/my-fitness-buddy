@@ -1,7 +1,7 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { useRef, useState } from 'react';
-import { Alert, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
@@ -10,6 +10,7 @@ import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { useAuth } from '@/lib/auth';
 import { bmiCategory, computeBmi } from '@/lib/bmi';
+import { showAlert } from '@/lib/dialog';
 import { ageFromDob, formatDobInput } from '@/lib/date';
 import { requireUserId, supabase } from '@/lib/supabase';
 import type { Unit } from '@/lib/types';
@@ -62,11 +63,11 @@ export default function OnboardingScreen() {
   const next = () => {
     if (step === 1) {
       if (!heightNum || heightNum <= 0) {
-        Alert.alert('Add your height', 'Enter your height in centimetres to continue.');
+        showAlert('Add your height', 'Enter your height in centimetres to continue.');
         return;
       }
       if (!weightKg || weightKg <= 0) {
-        Alert.alert('Add your weight', 'Enter your weight to continue.');
+        showAlert('Add your weight', 'Enter your weight to continue.');
         return;
       }
     }
@@ -89,7 +90,7 @@ export default function OnboardingScreen() {
       userId = await requireUserId();
     } catch (e) {
       setSaving(false);
-      Alert.alert('Could not save', (e as Error).message);
+      showAlert('Could not save', (e as Error).message);
       return;
     }
     const [pErr, gErr] = await Promise.all([
@@ -109,7 +110,7 @@ export default function OnboardingScreen() {
     ]).then((res) => [res[0].error, res[1].error]);
     setSaving(false);
     if (pErr || gErr) {
-      Alert.alert('Could not save', (pErr ?? gErr)?.message ?? 'Please try again.');
+      showAlert('Could not save', (pErr ?? gErr)?.message ?? 'Please try again.');
       return;
     }
     // The save succeeded under a verified user id, so advance immediately rather

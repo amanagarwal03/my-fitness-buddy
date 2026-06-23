@@ -1,6 +1,8 @@
 import { Stack, useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, Pressable, ScrollView, Share, StyleSheet, View } from 'react-native';
+import { Pressable, ScrollView, Share, StyleSheet, View } from 'react-native';
+
+import { showAlert } from '@/lib/dialog';
 
 import { ThemedText } from '@/components/themed-text';
 import { Button, Card, Field, Screen } from '@/components/ui';
@@ -35,7 +37,7 @@ export default function ShareScreen() {
 
   useEffect(() => {
     if (!userId) return;
-    getOrCreateMyCode(userId).then(setMyCode).catch((e) => Alert.alert('Error', String(e)));
+    getOrCreateMyCode(userId).then(setMyCode).catch((e) => showAlert('Error', String(e)));
     refresh();
   }, [userId, refresh]);
 
@@ -49,7 +51,7 @@ export default function ShareScreen() {
   const onRedeem = async () => {
     const code = codeInput.trim().toUpperCase();
     if (code.length < 4) {
-      Alert.alert('Enter a code', 'Type the code your friend shared with you.');
+      showAlert('Enter a code', 'Type the code your friend shared with you.');
       return;
     }
     setRedeeming(true);
@@ -59,14 +61,14 @@ export default function ShareScreen() {
       await refresh();
       router.push(`/shared/${ownerId}`);
     } catch (e) {
-      Alert.alert('Could not add', e instanceof Error ? e.message : String(e));
+      showAlert('Could not add', e instanceof Error ? e.message : String(e));
     } finally {
       setRedeeming(false);
     }
   };
 
   const revoke = (g: ShareGrant) => {
-    Alert.alert('Remove access?', `${g.viewer_label ?? 'This person'} will no longer see your data.`, [
+    showAlert('Remove access?', `${g.viewer_label ?? 'This person'} will no longer see your data.`, [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Remove',

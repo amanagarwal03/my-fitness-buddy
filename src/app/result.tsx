@@ -1,8 +1,9 @@
 import { Image } from 'expo-image';
-import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+
+import { showAlert } from '@/lib/dialog';
 
 import { ThemedText } from '@/components/themed-text';
 import { Button, Card, Screen } from '@/components/ui';
@@ -10,6 +11,7 @@ import { Spacing } from '@/constants/theme';
 import { isoDate } from '@/lib/date';
 import { useTheme } from '@/hooks/use-theme';
 import { useAuth } from '@/lib/auth';
+import { takePendingMealImage } from '@/lib/pendingMeal';
 import { uploadMealPhoto } from '@/lib/storage';
 import { requireUserId, supabase } from '@/lib/supabase';
 import type { MealAnalysis, MealItem } from '@/lib/types';
@@ -37,8 +39,11 @@ export default function ResultScreen() {
   const theme = useTheme();
   const router = useRouter();
   const { session } = useAuth();
-  const params = useLocalSearchParams<{ analysis?: string; imageUri?: string; mealType?: string }>();
+  const params = useLocalSearchParams<{ analysis?: string; mealType?: string }>();
   const [saving, setSaving] = useState(false);
+  // Captured photo handed over from the nutrition screen (uri for preview,
+  // base64 for upload). Read once so it survives re-renders.
+  const [photo] = useState(() => takePendingMealImage());
 
   const analysis = useMemo<MealAnalysis | null>(() => {
     if (!params.analysis) return null;
@@ -117,7 +122,7 @@ export default function ResultScreen() {
   const save = async () => {
     if (!session) return;
     if (items.length === 0) {
-      Alert.alert('No items', 'Add at least one food item before saving.');
+      showAlert('No items', 'Add at least one food item before saving.');
       return;
     }
     const mealItems: MealItem[] = items.map((it) => ({
@@ -134,7 +139,7 @@ export default function ResultScreen() {
       userId = await requireUserId();
     } catch (e) {
       setSaving(false);
-      Alert.alert('Could not save', (e as Error).message);
+      showAlert('Could not save', (e as Error).message);
       return;
     }
     const { data: inserted, error } = await supabase
@@ -155,18 +160,14 @@ export default function ResultScreen() {
       .single();
     if (error) {
       setSaving(false);
-      Alert.alert('Could not save', error.message);
+      showAlert('Could not save', error.message);
       return;
     }
     // Upload the meal photo (best-effort — the meal is already saved either way).
-    if (params.imageUri && inserted?.id) {
+    if (photo?.base64 && inserted?.id) {
       try {
-        const ref = await ImageManipulator.manipulate(params.imageUri).renderAsync();
-        const out = await ref.saveAsync({ base64: true, compress: 0.6, format: SaveFormat.JPEG });
-        if (out.base64) {
-          const path = await uploadMealPhoto(userId, inserted.id, isoDate(), out.base64);
-          await supabase.from('meals').update({ image_url: path }).eq('id', inserted.id);
-        }
+        const path = await uploadMealPhoto(userId, inserted.id, isoDate(), photo.base64);
+        await supabase.from('meals').update({ image_url: path }).eq('id', inserted.id);
       } catch {
         // Ignore photo failures; the nutrition data is what matters most.
       }
@@ -178,8 +179,8 @@ export default function ResultScreen() {
   return (
     <Screen edges={['bottom']}>
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-        {params.imageUri ? (
-          <Image source={{ uri: params.imageUri }} style={styles.image} contentFit="cover" />
+        {photo?.uri ? (
+          <Image source={{ uri: photo.uri }} style={styles.image} contentFit="cover" />
         ) : null}
 
         <ThemedText type="subtitle">{analysis.name}</ThemedText>
