@@ -1,6 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+import type { LogKind } from './exerciseKind';
 import type { Unit } from './types';
+import type { SpeedUnit } from './units';
 
 // An in-progress workout, persisted so the user can leave the Log screen (e.g.
 // press back) and resume it later from the Workout tab. Timing is stored as an
@@ -12,6 +14,10 @@ const KEY = 'active-workout-v1';
 export type StoredSet = {
   weight: string;
   reps: string;
+  // Cardio + duration-based entries (optional; absent on older strength saves).
+  durationSec?: number;
+  incline?: string;
+  speed?: string;
   done: boolean;
   prevKg?: number | null;
   prevReps?: number | null;
@@ -21,6 +27,7 @@ export type StoredExercise = {
   id: string;
   name: string;
   bodyPart: string;
+  kind?: LogKind; // how this exercise is logged (absent on older saves)
   sets: StoredSet[];
 };
 export type ActiveWorkout = {
@@ -28,6 +35,7 @@ export type ActiveWorkout = {
   elapsedBeforePause: number; // seconds accumulated while running
   runningSince: number | null; // ms epoch when currently running; null when paused
   unit: Unit;
+  speedUnit?: SpeedUnit; // for cardio speed entry (absent on older saves)
   exercises: StoredExercise[];
   updatedAt: number;
 };

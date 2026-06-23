@@ -1,7 +1,7 @@
 import { Image } from 'expo-image';
 import { Stack, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import { CollapsibleCalendar } from '@/components/calendar';
 import { ThemedText } from '@/components/themed-text';
@@ -10,7 +10,7 @@ import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { bmiCategory, computeBmi } from '@/lib/bmi';
 import { BODY_PART_META } from '@/lib/bodyparts';
-import { formatDuration, isoDate } from '@/lib/date';
+import { ageFromDob, formatDuration, isoDate } from '@/lib/date';
 import { signedPhotoUrls } from '@/lib/storage';
 import { supabase } from '@/lib/supabase';
 import type { BodyPart, Meal, Profile, Unit, WorkoutSession, WorkoutSet } from '@/lib/types';
@@ -62,6 +62,7 @@ export default function SharedProfileScreen() {
   const [sessionGroups, setSessionGroups] = useState<Record<string, ExerciseGroup[]>>({});
   const [manualGroups, setManualGroups] = useState<ExerciseGroup[]>([]);
   const [photoUrls, setPhotoUrls] = useState<Record<string, string>>({});
+  const [photoModal, setPhotoModal] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   // One-time: identity, profile/BMI, and the marked-days set for the calendar.
@@ -158,13 +159,18 @@ export default function SharedProfileScreen() {
   );
   const bmi =
     profile?.height_cm && profile?.weight_kg ? computeBmi(profile.height_cm, profile.weight_kg) : null;
-  // Prefer the person's real name; fall back to the share label (their email).
+  // Respect the owner's sharing choices: name is shown by default; age & gender
+  // only when explicitly enabled. Fall back to the share label (their email)
+  // when the name is hidden or unset.
   const fullName = [profile?.first_name, profile?.last_name].filter(Boolean).join(' ').trim();
-  const displayName = fullName || label;
-  const genderLabel = profile?.sex ? profile.sex.charAt(0).toUpperCase() + profile.sex.slice(1) : null;
-  const identitySub = [profile?.age != null ? `${profile.age} yrs` : null, genderLabel]
-    .filter(Boolean)
-    .join('  ·  ');
+  const displayName = (profile?.share_name === false ? '' : fullName) || label;
+  const sharedAge = ageFromDob(profile?.dob) ?? profile?.age ?? null;
+  const ageLabel = profile?.share_age && sharedAge != null ? `${sharedAge} yrs` : null;
+  const genderLabel =
+    profile?.share_gender && profile?.sex
+      ? profile.sex.charAt(0).toUpperCase() + profile.sex.slice(1)
+      : null;
+  const identitySub = [ageLabel, genderLabel].filter(Boolean).join('  ·  ');
   const initial = (displayName.trim()[0] ?? '?').toUpperCase();
   const hasWorkout = daySessions.length > 0 || manualGroups.length > 0;
 
@@ -243,15 +249,35 @@ export default function SharedProfileScreen() {
               {meals.map((m) => {
                 const url = m.image_url ? photoUrls[m.image_url] : undefined;
                 return (
-                  <View key={m.id} style={styles.row}>
-                    {url ? <Image source={{ uri: url }} style={styles.thumb} contentFit="cover" /> : null}
+                  <Pressable
+                    key={m.id}
+                    onPress={url ? () => setPhotoModal(url) : undefined}
+                    disabled={!url}
+                    style={({ pressed }) => [
+                      styles.row,
+                      pressed && url ? { opacity: 0.6 } : null,
+                    ]}>
+                    {url ? (
+                      <Image source={{ uri: url }} style={styles.thumb} contentFit="cover" />
+                    ) : (
+                      <View style={[styles.thumb, styles.thumbPlaceholder, { borderColor: theme.border }]}>
+                        <ThemedText type="small" themeColor="textSecondary">
+                          🍽
+                        </ThemedText>
+                      </View>
+                    )}
                     <ThemedText type="small" style={{ flex: 1 }} numberOfLines={1}>
                       {m.name || 'Meal'}
                     </ThemedText>
+                    {url ? (
+                      <ThemedText type="small" themeColor="primary">
+                        📷
+                      </ThemedText>
+                    ) : null}
                     <ThemedText type="small" themeColor="textSecondary">
                       {Math.round(m.calories)} kcal
                     </ThemedText>
-                  </View>
+                  </Pressable>
                 );
               })}
             </View>
@@ -300,6 +326,22 @@ export default function SharedProfileScreen() {
           </>
         )}
       </ScrollView>
+
+      {/* Full-screen meal photo — tap anywhere to close. */}
+      <Modal
+        visible={!!photoModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setPhotoModal(null)}>
+        <Pressable style={styles.photoOverlay} onPress={() => setPhotoModal(null)}>
+          {photoModal ? (
+            <Image source={{ uri: photoModal }} style={styles.fullPhoto} contentFit="contain" />
+          ) : null}
+          <ThemedText type="small" style={{ color: '#fff', marginTop: Spacing.three }}>
+            Tap anywhere to close
+          </ThemedText>
+        </Pressable>
+      </Modal>
     </Screen>
   );
 }
@@ -443,8 +485,21 @@ const styles = StyleSheet.create({
   macroChips: { flexDirection: 'row', gap: Spacing.two, flexWrap: 'wrap', justifyContent: 'flex-end' },
   chip: { flexDirection: 'row', alignItems: 'center', gap: Spacing.one },
   mealList: { gap: Spacing.one, marginTop: Spacing.two, paddingTop: Spacing.one },
-  row: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two, paddingTop: Spacing.one },
+  row: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two, paddingVertical: Spacing.one },
   thumb: { width: 32, height: 32, borderRadius: 6 },
+  thumbPlaceholder: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  photoOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.9)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: Spacing.three,
+  },
+  fullPhoto: { width: '100%', height: '80%', borderRadius: Spacing.three },
   sessionHeader: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
   sessionStats: { alignItems: 'flex-end' },
   exerciseTitleRow: {

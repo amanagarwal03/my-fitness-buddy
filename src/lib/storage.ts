@@ -56,11 +56,18 @@ export async function signedPhotoUrls(paths: string[]): Promise<Record<string, s
  * nothing to prune.
  */
 export async function pruneOldPhotos(): Promise<void> {
+  // Scope to the signed-in user: the coach-sharing RLS policy lets a viewer
+  // SELECT a shared owner's meals, so an unscoped query would try to prune
+  // another account's photos.
+  const { data: userData } = await supabase.auth.getUser();
+  const uid = userData.user?.id;
+  if (!uid) return;
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - PHOTO_RETENTION_DAYS);
   const { data } = await supabase
     .from('meals')
     .select('id, image_url')
+    .eq('user_id', uid)
     .lt('eaten_at', cutoff.toISOString())
     .not('image_url', 'is', null);
   const rows = (data as { id: string; image_url: string }[] | null) ?? [];

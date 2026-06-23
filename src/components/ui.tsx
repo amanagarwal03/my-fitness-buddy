@@ -104,6 +104,12 @@ export function Field({
         <TextInput
           placeholderTextColor={theme.textSecondary}
           secureTextEntry={isPassword && hidden}
+          // Sensible defaults for password fields so secure typing stays smooth
+          // on Android (autofill/autocorrect fighting a controlled value is the
+          // usual cause of laggy/jumpy input). Callers can still override these.
+          {...(isPassword
+            ? { autoCapitalize: 'none' as const, autoCorrect: false, spellCheck: false }
+            : null)}
           style={[
             styles.input,
             { color: theme.text, backgroundColor: theme.background, borderColor: theme.border },

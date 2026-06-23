@@ -25,6 +25,10 @@ export type Profile = {
   unit_pref: Unit;
   sex: 'male' | 'female' | 'other' | null;
   dob: string | null;
+  // What a coach sees on the shared profile (name on by default; age/gender off).
+  share_name: boolean;
+  share_age: boolean;
+  share_gender: boolean;
   updated_at: string;
 };
 

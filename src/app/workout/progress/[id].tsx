@@ -7,6 +7,7 @@ import { ThemedText } from '@/components/themed-text';
 import { Card, Screen, SegmentedControl } from '@/components/ui';
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
+import { useAuth } from '@/lib/auth';
 import { formatDuration } from '@/lib/date';
 import { PREVIEW_MODE, previewProgressKg, previewProgressKmh } from '@/lib/preview';
 import { supabase } from '@/lib/supabase';
@@ -40,6 +41,8 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
 
 export default function ProgressScreen() {
   const theme = useTheme();
+  const { session } = useAuth();
+  const uid = session?.user.id;
   const { id, name, bodyPart } = useLocalSearchParams<{
     id: string;
     name?: string;
@@ -79,13 +82,15 @@ export default function ProgressScreen() {
       setLoading(false);
       return;
     }
+    if (!uid) return;
     const since = new Date();
     since.setDate(since.getDate() - 365);
     const [profileRes, setsRes] = await Promise.all([
-      supabase.from('profiles').select('unit_pref').maybeSingle(),
+      supabase.from('profiles').select('unit_pref').eq('user_id', uid).maybeSingle(),
       supabase
         .from('workout_sets')
         .select('*')
+        .eq('user_id', uid)
         .eq('exercise_id', id)
         .gte('performed_on', since.toISOString().slice(0, 10))
         .order('performed_on', { ascending: true }),
@@ -93,7 +98,7 @@ export default function ProgressScreen() {
     setUnit((profileRes.data?.unit_pref as Unit) ?? 'kg');
     setSets((setsRes.data as WorkoutSet[]) ?? []);
     setLoading(false);
-  }, [id]);
+  }, [id, uid]);
 
   useFocusEffect(
     useCallback(() => {

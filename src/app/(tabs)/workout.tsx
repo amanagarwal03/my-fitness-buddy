@@ -10,12 +10,14 @@ import { Button, Card, Screen } from '@/components/ui';
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { clearActiveWorkout, liveElapsed, loadActiveWorkout } from '@/lib/activeWorkout';
+import { useAuth } from '@/lib/auth';
 import { BODY_PART_META } from '@/lib/bodyparts';
+import { distanceKm, estimateCalories } from '@/lib/cardio';
 import { formatDuration, isoDate } from '@/lib/date';
 import { PREVIEW_MODE, previewTodaySessions } from '@/lib/preview';
 import { supabase } from '@/lib/supabase';
 import { BODY_PARTS, type BodyPart, type Unit, type WorkoutSession, type WorkoutSet } from '@/lib/types';
-import { fromKg, round1 } from '@/lib/units';
+import { fromKg, fromKmh, round1, type SpeedUnit } from '@/lib/units';
 
 // A set with its exercise's name/body part joined in.
 type JoinedSet = WorkoutSet & { exercises: { name: string; body_part: BodyPart } | null };
@@ -50,6 +52,8 @@ function groupByExercise(rows: JoinedSet[]): ExerciseGroup[] {
 export default function WorkoutScreen() {
   const theme = useTheme();
   const router = useRouter();
+  const { session } = useAuth();
+  const uid = session?.user.id;
 
   const [selectedDate, setSelectedDate] = useState(() => new Date());
   const [daySessions, setDaySessions] = useState<WorkoutSession[]>([]);
@@ -61,6 +65,8 @@ export default function WorkoutScreen() {
   const [profileUnit, setProfileUnit] = useState<Unit>('kg');
   const [unitOverride, setUnitOverride] = useState<Unit | null>(null);
   const unit = unitOverride ?? profileUnit;
+  const [speedUnit, setSpeedUnit] = useState<SpeedUnit>('kmph');
+  const [weightKg, setWeightKg] = useState<number | null>(null); // body weight, for calorie estimates
   const [activeElapsed, setActiveElapsed] = useState<number | null>(null);
 
   const checkActive = useCallback(async () => {
@@ -75,27 +81,34 @@ export default function WorkoutScreen() {
       setDaySessions(previewTodaySessions);
       return;
     }
+    if (!uid) return;
     const day = isoDate(selectedDate);
     const dayStart = new Date(selectedDate);
     dayStart.setHours(0, 0, 0, 0);
     const dayEnd = new Date(selectedDate);
     dayEnd.setHours(23, 59, 59, 999);
+    // Scope every read to the signed-in user: the coach-sharing RLS policy lets a
+    // viewer SELECT a shared owner's rows, so unscoped queries would surface
+    // another account's workouts (and pick up their unit preference).
     const [profileRes, setsRes, sessRes] = await Promise.all([
-      supabase.from('profiles').select('unit_pref').maybeSingle(),
+      supabase.from('profiles').select('unit_pref, weight_kg').eq('user_id', uid).maybeSingle(),
       supabase
         .from('workout_sets')
         .select('*, exercises(name, body_part)')
+        .eq('user_id', uid)
         .eq('performed_on', day)
         .order('set_number', { ascending: true }),
       supabase
         .from('workout_sessions')
         .select('*')
+        .eq('user_id', uid)
         .gte('started_at', dayStart.toISOString())
         .lte('started_at', dayEnd.toISOString())
         .not('ended_at', 'is', null)
         .order('started_at', { ascending: true }),
     ]);
     setProfileUnit((profileRes.data?.unit_pref as Unit) ?? 'kg');
+    setWeightKg((profileRes.data?.weight_kg as number | null) ?? null);
     setDaySessions((sessRes.data as WorkoutSession[]) ?? []);
 
     const rows = (setsRes.data ?? []) as JoinedSet[];
@@ -109,18 +122,20 @@ export default function WorkoutScreen() {
     for (const [sid, srows] of Object.entries(bySession)) grouped[sid] = groupByExercise(srows);
     setSessionGroups(grouped);
     setManualGroups(groupByExercise(manual));
-  }, [selectedDate]);
+  }, [selectedDate, uid]);
 
   const loadMarks = useCallback(async () => {
     if (PREVIEW_MODE) return;
+    if (!uid) return;
     const since = new Date();
     since.setDate(since.getDate() - 120);
     const { data } = await supabase
       .from('workout_sets')
       .select('performed_on')
+      .eq('user_id', uid)
       .gte('performed_on', isoDate(since));
     if (data) setDayMarks(new Set(data.map((r: { performed_on: string }) => r.performed_on)));
-  }, []);
+  }, [uid]);
 
   useEffect(() => {
     loadDay();
@@ -190,11 +205,18 @@ export default function WorkoutScreen() {
   const viewingToday = isoDate(selectedDate) === isoDate();
 
   // Day totals for the summary strip.
+  const sessionGroupsFlat = Object.values(sessionGroups).flat();
   const totalDuration = daySessions.reduce((a, s) => a + (s.duration_seconds ?? 0), 0);
   const totalSets =
-    Object.values(sessionGroups)
-      .flat()
-      .reduce((a, g) => a + g.sets.length, 0) + manualGroups.reduce((a, g) => a + g.sets.length, 0);
+    sessionGroupsFlat.reduce((a, g) => a + g.sets.length, 0) +
+    manualGroups.reduce((a, g) => a + g.sets.length, 0);
+  // Count every exercise logged today (sessions + quick logs) so a muscle-group
+  // quick log still reads as activity instead of "0 sessions".
+  const totalExercises = sessionGroupsFlat.length + manualGroups.length;
+  // Any cardio logged today → offer the speed-unit toggle.
+  const hasCardio =
+    sessionGroupsFlat.some((g) => g.bodyPart === 'cardio') ||
+    manualGroups.some((g) => g.bodyPart === 'cardio');
 
   return (
     <Screen>
@@ -227,10 +249,31 @@ export default function WorkoutScreen() {
           markedDays={dayMarks}
         />
 
-        {/* Day header + unit toggle */}
+        {/* Day header + unit toggles */}
         <View style={styles.dayHeader}>
-          <ThemedText type="smallBold">Logged on {dayLabel(selectedDate)}</ThemedText>
-          {hasAnything ? <UnitToggle unit={unit} onChange={setUnitOverride} /> : null}
+          <ThemedText type="smallBold" style={{ flex: 1 }}>
+            Logged on {dayLabel(selectedDate)}
+          </ThemedText>
+          {hasCardio ? (
+            <PillToggle<SpeedUnit>
+              value={speedUnit}
+              onChange={setSpeedUnit}
+              options={[
+                { label: 'km/h', value: 'kmph' },
+                { label: 'mph', value: 'mph' },
+              ]}
+            />
+          ) : null}
+          {hasAnything ? (
+            <PillToggle<Unit>
+              value={unit}
+              onChange={setUnitOverride}
+              options={[
+                { label: 'kg', value: 'kg' },
+                { label: 'lbs', value: 'lbs' },
+              ]}
+            />
+          ) : null}
         </View>
 
         {!viewingToday ? (
@@ -248,8 +291,8 @@ export default function WorkoutScreen() {
             <SummaryStat emoji="🏋️" label="Sets" value={String(totalSets)} accent={theme.success} />
             <SummaryStat
               emoji="🔥"
-              label={daySessions.length === 1 ? 'Session' : 'Sessions'}
-              value={String(daySessions.length)}
+              label={totalExercises === 1 ? 'Exercise' : 'Exercises'}
+              value={String(totalExercises)}
               accent="#F59E0B"
             />
           </View>
@@ -262,6 +305,8 @@ export default function WorkoutScreen() {
             session={s}
             groups={sessionGroups[s.id] ?? []}
             unit={unit}
+            speedUnit={speedUnit}
+            weightKg={weightKg}
             onEdit={() => router.push({ pathname: '/workout/edit-session/[id]', params: { id: s.id } })}
             onDelete={() => deleteSession(s)}
           />
@@ -273,7 +318,14 @@ export default function WorkoutScreen() {
           </ThemedText>
         ) : null}
         {manualGroups.map((g) => (
-          <ExerciseLogCard key={g.exerciseId} group={g} unit={unit} onDelete={() => deleteManualLog(g)} />
+          <ExerciseLogCard
+            key={g.exerciseId}
+            group={g}
+            unit={unit}
+            speedUnit={speedUnit}
+            weightKg={weightKg}
+            onDelete={() => deleteManualLog(g)}
+          />
         ))}
 
         {!hasAnything ? (
@@ -329,17 +381,25 @@ export default function WorkoutScreen() {
   );
 }
 
-function UnitToggle({ unit, onChange }: { unit: Unit; onChange: (u: Unit) => void }) {
+function PillToggle<T extends string>({
+  value,
+  onChange,
+  options,
+}: {
+  value: T;
+  onChange: (v: T) => void;
+  options: { label: string; value: T }[];
+}) {
   const theme = useTheme();
   return (
     <View style={[styles.unitToggle, { borderColor: theme.border }]}>
-      {(['kg', 'lbs'] as Unit[]).map((u) => (
+      {options.map((o) => (
         <Pressable
-          key={u}
-          onPress={() => onChange(u)}
-          style={[styles.unitOption, { backgroundColor: u === unit ? theme.primary : 'transparent' }]}>
-          <ThemedText type="smallBold" style={{ color: u === unit ? '#fff' : theme.textSecondary }}>
-            {u}
+          key={o.value}
+          onPress={() => onChange(o.value)}
+          style={[styles.unitOption, { backgroundColor: o.value === value ? theme.primary : 'transparent' }]}>
+          <ThemedText type="smallBold" style={{ color: o.value === value ? '#fff' : theme.textSecondary }}>
+            {o.label}
           </ThemedText>
         </Pressable>
       ))}
@@ -379,6 +439,8 @@ function SessionCard({
   session,
   groups,
   unit,
+  speedUnit,
+  weightKg,
   onEdit,
   onDelete,
 }: {
@@ -386,6 +448,8 @@ function SessionCard({
   session: WorkoutSession;
   groups: ExerciseGroup[];
   unit: Unit;
+  speedUnit: SpeedUnit;
+  weightKg: number | null;
   onEdit: () => void;
   onDelete: () => void;
 }) {
@@ -442,17 +506,32 @@ function SessionCard({
           No sets recorded.
         </ThemedText>
       ) : (
-        groups.map((g) => <ExerciseBlock key={g.exerciseId} group={g} unit={unit} />)
+        groups.map((g) => (
+          <ExerciseBlock key={g.exerciseId} group={g} unit={unit} speedUnit={speedUnit} weightKg={weightKg} />
+        ))
       )}
     </Card>
   );
 }
 
 // One exercise: color accent bar, name + muscle tag, and sets as chips.
-function ExerciseBlock({ group, unit }: { group: ExerciseGroup; unit: Unit }) {
+function ExerciseBlock({
+  group,
+  unit,
+  speedUnit,
+  weightKg,
+}: {
+  group: ExerciseGroup;
+  unit: Unit;
+  speedUnit: SpeedUnit;
+  weightKg: number | null;
+}) {
   const theme = useTheme();
   const isCardio = group.bodyPart === 'cardio';
   const meta = BODY_PART_META[group.bodyPart];
+  const speedLabel = speedUnit === 'kmph' ? 'km/h' : 'mph';
+  const distLabel = speedUnit === 'kmph' ? 'km' : 'mi';
+  const toDist = (km: number) => (speedUnit === 'kmph' ? km : km * 0.621371);
   return (
     <View style={styles.exBlock}>
       <View style={[styles.exAccent, { backgroundColor: meta?.color ?? theme.primary }]} />
@@ -475,8 +554,14 @@ function ExerciseBlock({ group, unit }: { group: ExerciseGroup; unit: Unit }) {
               {isCardio ? (
                 <ThemedText type="small">
                   {formatDuration(s.duration_seconds ?? 0)}
-                  {s.speed_kmh != null ? ` · ${round1(s.speed_kmh)} km/h` : ''}
+                  {s.speed_kmh != null ? ` · ${round1(fromKmh(s.speed_kmh, speedUnit))} ${speedLabel}` : ''}
                   {s.incline != null ? ` · ${s.incline}%` : ''}
+                  {distanceKm(s.speed_kmh, s.duration_seconds) > 0
+                    ? ` · ≈${round1(toDist(distanceKm(s.speed_kmh, s.duration_seconds)))} ${distLabel}`
+                    : ''}
+                  {s.duration_seconds
+                    ? ` · ≈${estimateCalories({ durationSec: s.duration_seconds, speedKmh: s.speed_kmh, incline: s.incline, weightKg })} kcal`
+                    : ''}
                 </ThemedText>
               ) : (
                 <ThemedText type="small">
@@ -502,17 +587,21 @@ function ExerciseBlock({ group, unit }: { group: ExerciseGroup; unit: Unit }) {
 function ExerciseLogCard({
   group,
   unit,
+  speedUnit,
+  weightKg,
   onDelete,
 }: {
   group: ExerciseGroup;
   unit: Unit;
+  speedUnit: SpeedUnit;
+  weightKg: number | null;
   onDelete: () => void;
 }) {
   return (
     <Card style={styles.sessionCard}>
       <View style={styles.sessionRow}>
         <View style={{ flex: 1 }}>
-          <ExerciseBlock group={group} unit={unit} />
+          <ExerciseBlock group={group} unit={unit} speedUnit={speedUnit} weightKg={weightKg} />
         </View>
         <Pressable onPress={onDelete} hitSlop={10}>
           <ThemedText type="smallBold" themeColor="danger">

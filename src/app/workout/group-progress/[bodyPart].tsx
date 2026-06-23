@@ -7,6 +7,7 @@ import { ThemedText } from '@/components/themed-text';
 import { Card, Screen } from '@/components/ui';
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
+import { useAuth } from '@/lib/auth';
 import { BODY_PART_META } from '@/lib/bodyparts';
 import { isoDate } from '@/lib/date';
 import { PREVIEW_MODE } from '@/lib/preview';
@@ -39,6 +40,8 @@ function dateLabel(iso: string): string {
 export default function GroupProgressScreen() {
   const theme = useTheme();
   const router = useRouter();
+  const { session } = useAuth();
+  const uid = session?.user.id;
   const { bodyPart } = useLocalSearchParams<{ bodyPart: BodyPart }>();
   const isCardio = bodyPart === 'cardio';
   const meta = bodyPart ? BODY_PART_META[bodyPart] : null;
@@ -56,12 +59,13 @@ export default function GroupProgressScreen() {
       setLoading(false);
       return;
     }
+    if (!uid) return;
     setLoading(true);
     const since = new Date();
     since.setDate(since.getDate() - 365);
 
     const [profileRes, exRes] = await Promise.all([
-      supabase.from('profiles').select('unit_pref').maybeSingle(),
+      supabase.from('profiles').select('unit_pref').eq('user_id', uid).maybeSingle(),
       supabase.from('exercises').select('*').eq('body_part', bodyPart).order('name', { ascending: true }),
     ]);
     const pref = (profileRes.data?.unit_pref as Unit) ?? 'kg';
@@ -79,6 +83,7 @@ export default function GroupProgressScreen() {
     const { data: setsData } = await supabase
       .from('workout_sets')
       .select('*')
+      .eq('user_id', uid)
       .in('exercise_id', ids)
       .gte('performed_on', isoDate(since))
       .order('performed_on', { ascending: true });
@@ -133,7 +138,7 @@ export default function GroupProgressScreen() {
     setSummaries(out);
     setNotLogged(empty);
     setLoading(false);
-  }, [bodyPart, isCardio]);
+  }, [bodyPart, isCardio, uid]);
 
   useFocusEffect(
     useCallback(() => {

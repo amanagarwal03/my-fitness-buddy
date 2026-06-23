@@ -84,6 +84,9 @@ export const previewProfile: Profile = {
   unit_pref: 'kg',
   sex: 'male',
   dob: null,
+  share_name: true,
+  share_age: false,
+  share_gender: false,
   updated_at: now.toISOString(),
 };
 

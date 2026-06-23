@@ -1,6 +1,14 @@
 import { requireUserId, supabase } from './supabase';
 
-export type ShareGrant = { owner_id: string; viewer_id: string; owner_label: string | null };
+export type ShareGrant = {
+  owner_id: string;
+  viewer_id: string;
+  owner_label: string | null;
+  // Email of the viewer who redeemed the code (captured at redeem time).
+  viewer_label?: string | null;
+  // The owner's display name (when they share it). Falls back to owner_label.
+  owner_name?: string | null;
+};
 
 // Avoids ambiguous characters (0/O, 1/I) in the human-typed code.
 const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -42,7 +50,23 @@ export async function redeemCode(code: string): Promise<string> {
 /** People who have shared their profile with me (I'm the viewer/coach). */
 export async function listSharedWithMe(userId: string): Promise<ShareGrant[]> {
   const { data } = await supabase.from('share_grants').select('*').eq('viewer_id', userId);
-  return (data as ShareGrant[]) ?? [];
+  const grants = (data as ShareGrant[]) ?? [];
+  if (grants.length === 0) return grants;
+  // Enrich with each owner's display name (respecting their share_name choice).
+  const ownerIds = grants.map((g) => g.owner_id);
+  const { data: profs } = await supabase
+    .from('profiles')
+    .select('user_id, first_name, last_name, share_name')
+    .in('user_id', ownerIds);
+  const nameById = new Map<string, string>();
+  for (const p of (profs as
+    | { user_id: string; first_name: string | null; last_name: string | null; share_name: boolean | null }[]
+    | null) ?? []) {
+    if (p.share_name === false) continue; // owner chose to hide their name
+    const name = [p.first_name, p.last_name].filter(Boolean).join(' ').trim();
+    if (name) nameById.set(p.user_id, name);
+  }
+  return grants.map((g) => ({ ...g, owner_name: nameById.get(g.owner_id) ?? null }));
 }
 
 /** People I've shared my profile with (I'm the owner). */

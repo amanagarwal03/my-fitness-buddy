@@ -1,14 +1,17 @@
 import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { Alert, ScrollView, StyleSheet, View } from 'react-native';
 
+import { StepperInput } from '@/components/stepper-input';
 import { ThemedText } from '@/components/themed-text';
 import { Button, Card, Field, Screen, SegmentedControl } from '@/components/ui';
 import { Spacing } from '@/constants/theme';
+import { useKeyboardAwareScroll } from '@/hooks/use-keyboard-aware-scroll';
 import { useTheme } from '@/hooks/use-theme';
 import { useAuth } from '@/lib/auth';
+import { distanceKm, estimateCalories } from '@/lib/cardio';
 import { formatDuration, isoDate } from '@/lib/date';
-import { sanitizeDecimal, sanitizeInt } from '@/lib/num';
+import { sanitizeDecimal } from '@/lib/num';
 import { PREVIEW_MODE, previewCardio, previewSets } from '@/lib/preview';
 import { requireUserId, supabase } from '@/lib/supabase';
 import type { BodyPart, Unit, WorkoutSet } from '@/lib/types';
@@ -53,11 +56,13 @@ function ProgressButton({ id, name, bodyPart }: { id: string; name?: string; bod
 // Strength logging — sets of weight (kg/lbs) + reps
 // ---------------------------------------------------------------------------
 type SetRow = { weight: string; reps: string };
-const emptyRows = (n: number): SetRow[] => Array.from({ length: n }, () => ({ weight: '', reps: '' }));
+const emptyRows = (n: number): SetRow[] => Array.from({ length: n }, () => ({ weight: '', reps: '15' }));
 
 function StrengthLog({ id, name }: { id: string; name?: string }) {
   const theme = useTheme();
   const { session: auth } = useAuth();
+  const uid = auth?.user.id;
+  const { scrollRef, handleInputFocus, keyboardSpacerHeight } = useKeyboardAwareScroll();
   const [unit, setUnit] = useState<Unit>('kg');
   const [rows, setRows] = useState<SetRow[]>(emptyRows(3));
   const [saving, setSaving] = useState(false);
@@ -69,12 +74,14 @@ function StrengthLog({ id, name }: { id: string; name?: string }) {
       setRows(previewSets.map((s) => ({ ...s })));
       return;
     }
+    if (!uid) return;
     const today = isoDate();
     const [profileRes, setsRes] = await Promise.all([
-      supabase.from('profiles').select('unit_pref').maybeSingle(),
+      supabase.from('profiles').select('unit_pref').eq('user_id', uid).maybeSingle(),
       supabase
         .from('workout_sets')
         .select('*')
+        .eq('user_id', uid)
         .eq('exercise_id', id)
         .order('performed_on', { ascending: false })
         .order('set_number', { ascending: true })
@@ -100,7 +107,7 @@ function StrengthLog({ id, name }: { id: string; name?: string }) {
       });
       setRows(next);
     }
-  }, [id]);
+  }, [id, uid]);
 
   useFocusEffect(
     useCallback(() => {
@@ -123,15 +130,6 @@ function StrengthLog({ id, name }: { id: string; name?: string }) {
     setRows((prev) => prev.map((r, idx) => (idx === i ? { ...r, [key]: value } : r)));
   };
 
-  // ± steppers nudge a set's weight by 5 (blank counts as 0, never goes below 0).
-  const bumpWeight = (i: number, delta: number) => {
-    setRows((prev) =>
-      prev.map((r, idx) =>
-        idx === i ? { ...r, weight: String(Math.max(0, round1((Number(r.weight) || 0) + delta))) } : r,
-      ),
-    );
-  };
-
   const save = async () => {
     if (PREVIEW_MODE) {
       Alert.alert('Preview mode', 'Connect Supabase to save your sets.');
@@ -147,23 +145,28 @@ function StrengthLog({ id, name }: { id: string; name?: string }) {
     }
     const today = isoDate();
 
-    const toInsert = rows
+    const rowsToSave = rows
       .map((r, i) => ({ r, i }))
-      .filter(({ r }) => r.weight !== '' && Number.isFinite(Number(r.weight)))
-      .map(({ r, i }) => ({
-        user_id: userId,
-        exercise_id: id,
-        session_id: null,
-        performed_on: today,
-        set_number: i + 1,
-        weight_kg: toKg(Number(r.weight), unit),
-        reps: r.reps !== '' && Number.isFinite(Number(r.reps)) ? Number(r.reps) : null,
-      }));
+      .filter(({ r }) => r.weight !== '' && Number.isFinite(Number(r.weight)));
 
-    if (toInsert.length === 0) {
+    if (rowsToSave.length === 0) {
       Alert.alert('Nothing to save', 'Enter a weight for at least one set.');
       return;
     }
+    if (rowsToSave.some(({ r }) => !(Number(r.reps) > 0))) {
+      Alert.alert('Add your reps', 'Every set needs a rep count greater than 0.');
+      return;
+    }
+
+    const toInsert = rowsToSave.map(({ r, i }) => ({
+      user_id: userId,
+      exercise_id: id,
+      session_id: null,
+      performed_on: today,
+      set_number: i + 1,
+      weight_kg: toKg(Number(r.weight), unit),
+      reps: Number(r.reps),
+    }));
 
     setSaving(true);
     // Manual (non-session) logs: replace today's sets for this exercise so
@@ -171,6 +174,7 @@ function StrengthLog({ id, name }: { id: string; name?: string }) {
     await supabase
       .from('workout_sets')
       .delete()
+      .eq('user_id', userId)
       .eq('exercise_id', id)
       .eq('performed_on', today)
       .is('session_id', null);
@@ -184,7 +188,11 @@ function StrengthLog({ id, name }: { id: string; name?: string }) {
   };
 
   return (
-    <ScrollView contentContainerStyle={styles.content}>
+    <ScrollView
+      ref={scrollRef}
+      contentContainerStyle={styles.content}
+      keyboardShouldPersistTaps="handled"
+      keyboardDismissMode="on-drag">
       <View style={styles.headerRow}>
         <ThemedText type="smallBold" themeColor="textSecondary">
           UNIT
@@ -206,46 +214,29 @@ function StrengthLog({ id, name }: { id: string; name?: string }) {
           <ThemedText type="smallBold" style={{ width: 44 }}>
             Set {i + 1}
           </ThemedText>
-          <View style={{ flex: 1.5 }}>
+          <View style={{ flex: 1.3 }}>
             <ThemedText type="small" themeColor="textSecondary" style={{ marginBottom: Spacing.one }}>
               Weight ({unit})
             </ThemedText>
-            <View style={styles.stepRow}>
-              <Pressable
-                onPress={() => bumpWeight(i, -5)}
-                hitSlop={6}
-                style={[styles.stepBtn, { borderColor: theme.border }]}>
-                <ThemedText type="smallBold" style={styles.stepGlyph}>
-                  −
-                </ThemedText>
-              </Pressable>
-              <TextInput
-                keyboardType="decimal-pad"
-                inputMode="decimal"
-                value={row.weight}
-                onChangeText={(t) => updateRow(i, 'weight', sanitizeDecimal(t))}
-                placeholder="0"
-                placeholderTextColor={theme.textSecondary}
-                style={[styles.stepInput, { color: theme.text, backgroundColor: theme.background, borderColor: theme.border }]}
-              />
-              <Pressable
-                onPress={() => bumpWeight(i, 5)}
-                hitSlop={6}
-                style={[styles.stepBtn, { borderColor: theme.border }]}>
-                <ThemedText type="smallBold" style={styles.stepGlyph}>
-                  ＋
-                </ThemedText>
-              </Pressable>
-            </View>
+            <StepperInput
+              value={row.weight}
+              onChangeText={(v) => updateRow(i, 'weight', v)}
+              onFocus={handleInputFocus}
+              step={5}
+              placeholder="0"
+            />
           </View>
           <View style={{ flex: 1 }}>
-            <Field
-              label="Reps"
-              keyboardType="number-pad"
-              inputMode="numeric"
+            <ThemedText type="small" themeColor="textSecondary" style={{ marginBottom: Spacing.one }}>
+              Reps
+            </ThemedText>
+            <StepperInput
               value={row.reps}
-              onChangeText={(t) => updateRow(i, 'reps', sanitizeInt(t))}
-              placeholder="—"
+              onChangeText={(v) => updateRow(i, 'reps', v)}
+              onFocus={handleInputFocus}
+              step={1}
+              integer
+              placeholder="0"
             />
           </View>
         </Card>
@@ -254,10 +245,11 @@ function StrengthLog({ id, name }: { id: string; name?: string }) {
       <Button
         title="＋ Add set"
         variant="secondary"
-        onPress={() => setRows((prev) => [...prev, { weight: '', reps: '' }])}
+        onPress={() => setRows((prev) => [...prev, { weight: '', reps: '15' }])}
       />
       <Button title="Save sets" onPress={save} loading={saving} />
       <ProgressButton id={id} name={name} />
+      <View style={{ height: keyboardSpacerHeight }} />
     </ScrollView>
   );
 }
@@ -267,6 +259,8 @@ function StrengthLog({ id, name }: { id: string; name?: string }) {
 // ---------------------------------------------------------------------------
 function CardioLog({ id, name }: { id: string; name?: string }) {
   const { session: auth } = useAuth();
+  const uid = auth?.user.id;
+  const { scrollRef, handleInputFocus, keyboardSpacerHeight } = useKeyboardAwareScroll();
   const [speedUnit, setSpeedUnit] = useState<SpeedUnit>('kmph');
   const [incline, setIncline] = useState('');
   const [speed, setSpeed] = useState('');
@@ -275,6 +269,7 @@ function CardioLog({ id, name }: { id: string; name?: string }) {
   const baseRef = useRef(0); // accumulated seconds before the current run
   const runStartRef = useRef<number | null>(null);
   const [saving, setSaving] = useState(false);
+  const [bodyWeightKg, setBodyWeightKg] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -286,21 +281,27 @@ function CardioLog({ id, name }: { id: string; name?: string }) {
       setTick((t) => t + 1);
       return;
     }
+    if (!uid) return;
     const today = isoDate();
-    const { data } = await supabase
-      .from('workout_sets')
-      .select('*')
-      .eq('exercise_id', id)
-      .eq('performed_on', today)
-      .order('set_number', { ascending: true });
-    const entry = (data as WorkoutSet[] | null)?.find((s) => s.set_number === 1);
+    const [setsRes, profileRes] = await Promise.all([
+      supabase
+        .from('workout_sets')
+        .select('*')
+        .eq('user_id', uid)
+        .eq('exercise_id', id)
+        .eq('performed_on', today)
+        .order('set_number', { ascending: true }),
+      supabase.from('profiles').select('weight_kg').eq('user_id', uid).maybeSingle(),
+    ]);
+    setBodyWeightKg((profileRes.data?.weight_kg as number | null) ?? null);
+    const entry = (setsRes.data as WorkoutSet[] | null)?.find((s) => s.set_number === 1);
     if (entry) {
       baseRef.current = entry.duration_seconds ?? 0;
       setIncline(entry.incline != null ? String(entry.incline) : '');
       setSpeed(entry.speed_kmh != null ? String(round1(fromKmh(entry.speed_kmh, 'kmph'))) : '');
       setTick((t) => t + 1);
     }
-  }, [id]);
+  }, [id, uid]);
 
   useFocusEffect(
     useCallback(() => {
@@ -368,6 +369,7 @@ function CardioLog({ id, name }: { id: string; name?: string }) {
     await supabase
       .from('workout_sets')
       .delete()
+      .eq('user_id', userId)
       .eq('exercise_id', id)
       .eq('performed_on', today)
       .is('session_id', null);
@@ -391,8 +393,26 @@ function CardioLog({ id, name }: { id: string; name?: string }) {
     Alert.alert('Saved', 'Your run has been logged.');
   };
 
+  // Live distance + calorie estimate from the current entry.
+  const liveDurationSec = Math.round(elapsed());
+  const liveSpeedKmh = speed !== '' && Number.isFinite(Number(speed)) ? toKmh(Number(speed), speedUnit) : 0;
+  const liveInc = incline !== '' && Number.isFinite(Number(incline)) ? Number(incline) : 0;
+  const liveDistKm = distanceKm(liveSpeedKmh, liveDurationSec);
+  const liveDistShown = speedUnit === 'kmph' ? liveDistKm : liveDistKm * 0.621371;
+  const liveCal = estimateCalories({
+    durationSec: liveDurationSec,
+    speedKmh: liveSpeedKmh,
+    incline: liveInc,
+    weightKg: bodyWeightKg,
+  });
+  const showEstimate = liveDurationSec > 0 || liveSpeedKmh > 0;
+
   return (
-    <ScrollView contentContainerStyle={styles.content}>
+    <ScrollView
+      ref={scrollRef}
+      contentContainerStyle={styles.content}
+      keyboardShouldPersistTaps="handled"
+      keyboardDismissMode="on-drag">
       <Card style={{ alignItems: 'center', gap: Spacing.two }}>
         <ThemedText type="small" themeColor="textSecondary">
           DURATION
@@ -418,6 +438,7 @@ function CardioLog({ id, name }: { id: string; name?: string }) {
           inputMode="decimal"
           value={incline}
           onChangeText={(t) => setIncline(sanitizeDecimal(t))}
+          onFocus={handleInputFocus}
           placeholder="0"
         />
         <View style={styles.headerRow}>
@@ -441,13 +462,38 @@ function CardioLog({ id, name }: { id: string; name?: string }) {
           inputMode="decimal"
           value={speed}
           onChangeText={(t) => setSpeed(sanitizeDecimal(t))}
+          onFocus={handleInputFocus}
           placeholder="0"
         />
       </Card>
 
+      {showEstimate ? (
+        <Card style={styles.estRow}>
+          <EstStat
+            label="Distance"
+            value={liveDistKm > 0 ? `≈ ${round1(liveDistShown)} ${speedUnit === 'kmph' ? 'km' : 'mi'}` : '—'}
+          />
+          <EstStat label="Est. calories" value={liveCal > 0 ? `≈ ${liveCal} kcal` : '—'} />
+        </Card>
+      ) : null}
+
       <Button title="Save run" onPress={save} loading={saving} />
       <ProgressButton id={id} name={name} bodyPart="cardio" />
+      <View style={{ height: keyboardSpacerHeight }} />
     </ScrollView>
+  );
+}
+
+function EstStat({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={{ flex: 1, alignItems: 'center', gap: 2 }}>
+      <ThemedText type="small" themeColor="textSecondary">
+        {label}
+      </ThemedText>
+      <ThemedText type="smallBold" style={{ fontSize: 16 }}>
+        {value}
+      </ThemedText>
+    </View>
   );
 }
 
@@ -456,24 +502,5 @@ const styles = StyleSheet.create({
   headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   setRow: { flexDirection: 'row', alignItems: 'flex-end', gap: Spacing.two },
   timerBtns: { flexDirection: 'row', gap: Spacing.two, alignSelf: 'stretch' },
-  stepRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.one },
-  stepBtn: {
-    width: 36,
-    height: 48,
-    borderRadius: Spacing.two,
-    borderWidth: StyleSheet.hairlineWidth,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  stepGlyph: { fontSize: 20, lineHeight: 22 },
-  stepInput: {
-    flex: 1,
-    borderRadius: Spacing.two,
-    borderWidth: StyleSheet.hairlineWidth,
-    paddingHorizontal: Spacing.two,
-    paddingVertical: Spacing.two,
-    fontSize: 16,
-    minHeight: 48,
-    textAlign: 'center',
-  },
+  estRow: { flexDirection: 'row', justifyContent: 'space-around' },
 });

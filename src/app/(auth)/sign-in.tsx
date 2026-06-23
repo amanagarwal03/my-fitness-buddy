@@ -170,7 +170,9 @@ export default function SignInScreen() {
               onChangeText={setPassword}
               onFocus={handleFieldFocus}
               secureTextEntry
-              placeholder="••••••••"
+              autoComplete={mode === 'signIn' ? 'current-password' : 'new-password'}
+              textContentType={mode === 'signIn' ? 'password' : 'newPassword'}
+              placeholder={mode === 'signIn' ? 'Your password' : 'Create a password'}
             />
             <Button
               title={mode === 'signIn' ? 'Sign in' : 'Create account'}

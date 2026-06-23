@@ -94,7 +94,9 @@ export default function ResetPasswordScreen() {
                 onChangeText={setPassword}
                 onFocus={handleFieldFocus}
                 secureTextEntry
-                placeholder="••••••••"
+                autoComplete="new-password"
+                textContentType="newPassword"
+                placeholder="Create a password"
               />
               <Field
                 label="Confirm password"
@@ -102,7 +104,9 @@ export default function ResetPasswordScreen() {
                 onChangeText={setConfirm}
                 onFocus={handleFieldFocus}
                 secureTextEntry
-                placeholder="••••••••"
+                autoComplete="new-password"
+                textContentType="newPassword"
+                placeholder="Re-enter your password"
               />
               <Button title="Update password" onPress={updatePassword} loading={loading} />
             </>

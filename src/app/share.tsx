@@ -66,7 +66,7 @@ export default function ShareScreen() {
   };
 
   const revoke = (g: ShareGrant) => {
-    Alert.alert('Remove access?', `${g.owner_label ?? 'This person'} will no longer see your data.`, [
+    Alert.alert('Remove access?', `${g.viewer_label ?? 'This person'} will no longer see your data.`, [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Remove',
@@ -123,7 +123,7 @@ export default function ShareScreen() {
                 <Card>
                   <View style={styles.row}>
                     <ThemedText type="smallBold" style={{ flex: 1 }} numberOfLines={1}>
-                      {g.owner_label ?? 'Shared profile'}
+                      {g.owner_name ?? g.owner_label ?? 'Shared profile'}
                     </ThemedText>
                     <ThemedText type="small" themeColor="primary">
                       View ›
@@ -143,9 +143,19 @@ export default function ShareScreen() {
             {viewers.map((g) => (
               <Card key={g.viewer_id}>
                 <View style={styles.row}>
-                  <ThemedText type="small" style={{ flex: 1 }} numberOfLines={1}>
-                    Has read access to your profile
-                  </ThemedText>
+                  <View style={styles.viewerAvatar}>
+                    <ThemedText type="smallBold" style={{ color: '#fff' }}>
+                      {(g.viewer_label ?? '?').charAt(0).toUpperCase()}
+                    </ThemedText>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <ThemedText type="smallBold" numberOfLines={1}>
+                      {g.viewer_label ?? 'A coach'}
+                    </ThemedText>
+                    <ThemedText type="small" themeColor="textSecondary">
+                      Has read access
+                    </ThemedText>
+                  </View>
                   <Pressable onPress={() => revoke(g)} hitSlop={8}>
                     <ThemedText type="smallBold" themeColor="danger">
                       Remove
@@ -163,5 +173,13 @@ export default function ShareScreen() {
 
 const styles = StyleSheet.create({
   content: { padding: Spacing.three, gap: Spacing.three, paddingBottom: Spacing.six },
-  row: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
+  row: { flexDirection: 'row', alignItems: 'center', gap: Spacing.three },
+  viewerAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#208AEF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 });

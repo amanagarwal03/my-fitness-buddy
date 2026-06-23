@@ -1,10 +1,12 @@
 import { Stack, useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Alert, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
+import { StepperInput } from '@/components/stepper-input';
 import { ThemedText } from '@/components/themed-text';
 import { Button, Card, Screen } from '@/components/ui';
 import { Spacing } from '@/constants/theme';
+import { useKeyboardAwareScroll } from '@/hooks/use-keyboard-aware-scroll';
 import { useTheme } from '@/hooks/use-theme';
 import {
   clearActiveWorkout,
@@ -13,58 +15,95 @@ import {
   saveActiveWorkout,
 } from '@/lib/activeWorkout';
 import { useAuth } from '@/lib/auth';
+import { distanceKm, estimateCalories } from '@/lib/cardio';
 import { formatDuration, isoDate } from '@/lib/date';
-import { sanitizeDecimal, sanitizeInt } from '@/lib/num';
+import { logKind, type LogKind } from '@/lib/exerciseKind';
 import { takePendingExercise } from '@/lib/pendingExercise';
 import { PREVIEW_MODE } from '@/lib/preview';
 import { requireUserId, supabase } from '@/lib/supabase';
-import type { Unit, WorkoutSet } from '@/lib/types';
-import { fromKg, round1, toKg } from '@/lib/units';
+import type { BodyPart, Unit, WorkoutSet } from '@/lib/types';
+import { fromKg, fromKmh, round1, toKg, toKmh, type SpeedUnit } from '@/lib/units';
 
-type SetEntry = { weight: string; reps: string; done: boolean; prevKg?: number | null; prevReps?: number | null };
-type LogExercise = { key: string; id: string; name: string; bodyPart: string; sets: SetEntry[] };
+type SetEntry = {
+  weight: string;
+  reps: string;
+  durationSec: number; // duration & cardio entries
+  incline: string; // cardio
+  speed: string; // cardio, in the active speed unit
+  done: boolean;
+  prevKg?: number | null;
+  prevReps?: number | null;
+};
+type LogExercise = { key: string; id: string; name: string; bodyPart: string; kind: LogKind; sets: SetEntry[] };
 
-// Build a set row. Pre-fills the weight/reps inputs with last time's values
-// (converted to the active unit) so the user can just tweak them with the ± steppers.
-const makeSet = (unit: Unit, prevKg?: number | null, prevReps?: number | null): SetEntry => ({
-  weight: prevKg != null ? String(round1(fromKg(prevKg, unit))) : '',
-  reps: prevReps != null ? String(prevReps) : '',
+const emptySet = (): SetEntry => ({
+  weight: '',
+  reps: '',
+  durationSec: 0,
+  incline: '',
+  speed: '',
   done: false,
+  prevKg: null,
+  prevReps: null,
+});
+
+// A strength set, pre-filled from last time (weight converted to active unit;
+// reps default to last time's, or 15 for a fresh exercise).
+const makeStrengthSet = (unit: Unit, prevKg?: number | null, prevReps?: number | null): SetEntry => ({
+  ...emptySet(),
+  weight: prevKg != null ? String(round1(fromKg(prevKg, unit))) : '',
+  reps: prevReps != null ? String(prevReps) : '15',
   prevKg: prevKg ?? null,
   prevReps: prevReps ?? null,
 });
-
-// How much the ± buttons nudge a weight, per unit.
-const WEIGHT_STEP = 5;
 
 export default function LogWorkoutScreen() {
   const theme = useTheme();
   const router = useRouter();
   const { session: auth } = useAuth();
+  const { scrollRef, handleInputFocus, keyboardSpacerHeight } = useKeyboardAwareScroll();
 
   const [unit, setUnit] = useState<Unit>('kg');
+  const [speedUnit, setSpeedUnit] = useState<SpeedUnit>('kmph');
   const [exercises, setExercises] = useState<LogExercise[]>([]);
   const [saving, setSaving] = useState(false);
-  // Timer: accumulated running seconds + the moment it started running (null when
-  // paused). Persisted so the workout can be left and resumed.
+  const [bodyWeightKg, setBodyWeightKg] = useState<number | null>(null);
   const [startedAt, setStartedAt] = useState<number>(() => Date.now());
   const [elapsedBeforePause, setElapsedBeforePause] = useState(0);
   const [runningSince, setRunningSince] = useState<number | null>(() => Date.now());
   const [ready, setReady] = useState(false);
-  // A ticking clock drives the live duration; deriving elapsed from this state
-  // (rather than calling Date.now() in render) keeps it recomputing every second.
   const [now, setNow] = useState(() => Date.now());
-  // Latest unit, readable inside addExercise (which intentionally has no deps).
+
   const unitRef = useRef(unit);
   useEffect(() => {
     unitRef.current = unit;
   }, [unit]);
+  const speedUnitRef = useRef(speedUnit);
+  useEffect(() => {
+    speedUnitRef.current = speedUnit;
+  }, [speedUnit]);
+  const uidRef = useRef(auth?.user.id);
+  useEffect(() => {
+    uidRef.current = auth?.user.id;
+  }, [auth]);
 
   // Live duration tick.
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, []);
+
+  // Body weight for calorie estimates.
+  useEffect(() => {
+    const uid = auth?.user.id;
+    if (!uid || PREVIEW_MODE) return;
+    supabase
+      .from('profiles')
+      .select('weight_kg')
+      .eq('user_id', uid)
+      .maybeSingle()
+      .then(({ data }) => setBodyWeightKg((data?.weight_kg as number | null) ?? null));
+  }, [auth]);
 
   // Restore an in-progress workout (or start fresh with the profile's unit).
   useEffect(() => {
@@ -81,9 +120,24 @@ export default function LogWorkoutScreen() {
         setElapsedBeforePause(saved.elapsedBeforePause);
         setRunningSince(saved.runningSince);
         setUnit(saved.unit);
-        setExercises(saved.exercises as LogExercise[]);
-      } else {
-        const { data } = await supabase.from('profiles').select('unit_pref').maybeSingle();
+        setSpeedUnit(saved.speedUnit ?? 'kmph');
+        // Normalise older saves that predate kind/cardio fields.
+        setExercises(
+          (saved.exercises ?? []).map((ex) => ({
+            key: ex.key,
+            id: ex.id,
+            name: ex.name,
+            bodyPart: ex.bodyPart,
+            kind: ex.kind ?? logKind(ex.bodyPart as BodyPart, ex.name),
+            sets: (ex.sets ?? []).map((s) => ({ ...emptySet(), ...s })),
+          })),
+        );
+      } else if (uidRef.current) {
+        const { data } = await supabase
+          .from('profiles')
+          .select('unit_pref')
+          .eq('user_id', uidRef.current)
+          .maybeSingle();
         if (active) setUnit((data?.unit_pref as Unit) ?? 'kg');
       }
       if (active) setReady(true);
@@ -96,8 +150,16 @@ export default function LogWorkoutScreen() {
   // Persist the in-progress workout whenever it changes.
   useEffect(() => {
     if (!ready || PREVIEW_MODE) return;
-    saveActiveWorkout({ startedAt, elapsedBeforePause, runningSince, unit, exercises, updatedAt: Date.now() });
-  }, [ready, startedAt, elapsedBeforePause, runningSince, unit, exercises]);
+    saveActiveWorkout({
+      startedAt,
+      elapsedBeforePause,
+      runningSince,
+      unit,
+      speedUnit,
+      exercises,
+      updatedAt: Date.now(),
+    });
+  }, [ready, startedAt, elapsedBeforePause, runningSince, unit, speedUnit, exercises]);
 
   const paused = runningSince === null;
   const pause = () => {
@@ -110,16 +172,20 @@ export default function LogWorkoutScreen() {
   };
 
   const addExercise = useCallback(async (id: string, name: string, bodyPart: string) => {
+    const kind = logKind(bodyPart as BodyPart, name);
     const prev: Record<number, { kg: number | null; reps: number | null }> = {};
-    if (!PREVIEW_MODE) {
+    let lastRow: WorkoutSet | undefined;
+    if (!PREVIEW_MODE && uidRef.current) {
       const { data } = await supabase
         .from('workout_sets')
         .select('*')
+        .eq('user_id', uidRef.current)
         .eq('exercise_id', id)
         .order('performed_on', { ascending: false })
         .order('set_number', { ascending: true })
         .limit(20);
       const rows = (data as WorkoutSet[]) ?? [];
+      lastRow = rows[0];
       const lastDay = rows[0]?.performed_on;
       rows
         .filter((r) => r.performed_on === lastDay)
@@ -127,19 +193,29 @@ export default function LogWorkoutScreen() {
           prev[r.set_number] = { kg: r.weight_kg, reps: r.reps };
         });
     }
-    setExercises((cur) => [
-      ...cur,
-      {
-        key: `${id}-${Date.now()}`,
-        id,
-        name,
-        bodyPart,
-        sets: [1, 2, 3].map((nset) => makeSet(unitRef.current, prev[nset]?.kg, prev[nset]?.reps)),
-      },
-    ]);
+
+    let sets: SetEntry[];
+    if (kind === 'cardio') {
+      // One entry, pre-filled with last time's incline/speed.
+      sets = [
+        {
+          ...emptySet(),
+          incline: lastRow?.incline != null ? String(lastRow.incline) : '',
+          speed:
+            lastRow?.speed_kmh != null
+              ? String(round1(fromKmh(lastRow.speed_kmh, speedUnitRef.current)))
+              : '',
+        },
+      ];
+    } else if (kind === 'duration') {
+      sets = [{ ...emptySet(), durationSec: lastRow?.duration_seconds ?? 0 }];
+    } else {
+      sets = [1, 2, 3].map((n) => makeStrengthSet(unitRef.current, prev[n]?.kg, prev[n]?.reps));
+    }
+
+    setExercises((cur) => [...cur, { key: `${id}-${Date.now()}`, id, name, bodyPart, kind, sets }]);
   }, []);
 
-  // Consume a picked exercise when returning from the picker.
   useFocusEffect(
     useCallback(() => {
       const p = takePendingExercise();
@@ -147,11 +223,11 @@ export default function LogWorkoutScreen() {
     }, [addExercise]),
   );
 
-  const updateSet = (exKey: string, idx: number, field: 'weight' | 'reps', value: string) =>
+  const patchSet = (exKey: string, idx: number, patch: Partial<SetEntry>) =>
     setExercises((cur) =>
       cur.map((ex) =>
         ex.key === exKey
-          ? { ...ex, sets: ex.sets.map((s, i) => (i === idx ? { ...s, [field]: value } : s)) }
+          ? { ...ex, sets: ex.sets.map((s, i) => (i === idx ? { ...s, ...patch } : s)) }
           : ex,
       ),
     );
@@ -165,39 +241,25 @@ export default function LogWorkoutScreen() {
       ),
     );
 
-  // A new set carries over the previous set's weight/reps (Hevy-style), so you
-  // only adjust what changed.
   const addSet = (exKey: string) =>
     setExercises((cur) =>
       cur.map((ex) => {
         if (ex.key !== exKey) return ex;
         const last = ex.sets[ex.sets.length - 1];
-        const seed: SetEntry = last
-          ? { weight: last.weight, reps: last.reps, done: false, prevKg: last.prevKg, prevReps: last.prevReps }
-          : makeSet(unitRef.current);
+        const seed: SetEntry = last ? { ...last, done: false } : emptySet();
         return { ...ex, sets: [...ex.sets, seed] };
       }),
     );
 
-  // ± steppers nudge a set's weight by WEIGHT_STEP (treating blank as 0, min 0).
-  const bumpWeight = (exKey: string, idx: number, delta: number) =>
+  const removeSet = (exKey: string, idx: number) =>
     setExercises((cur) =>
       cur.map((ex) =>
-        ex.key === exKey
-          ? {
-              ...ex,
-              sets: ex.sets.map((s, i) =>
-                i === idx
-                  ? { ...s, weight: String(Math.max(0, round1((Number(s.weight) || 0) + delta))) }
-                  : s,
-              ),
-            }
+        ex.key === exKey && ex.sets.length > 1
+          ? { ...ex, sets: ex.sets.filter((_, i) => i !== idx) }
           : ex,
       ),
     );
 
-  // Switch the logging unit and convert any already-entered weights so the
-  // displayed numbers stay equivalent (PREV is stored in kg and converted live).
   const toggleUnit = () => {
     const next: Unit = unit === 'kg' ? 'lbs' : 'kg';
     setExercises((cur) =>
@@ -213,22 +275,56 @@ export default function LogWorkoutScreen() {
     setUnit(next);
   };
 
+  const toggleSpeedUnit = () => {
+    const next: SpeedUnit = speedUnit === 'kmph' ? 'mph' : 'kmph';
+    setExercises((cur) =>
+      cur.map((ex) => ({
+        ...ex,
+        sets: ex.sets.map((s) =>
+          s.speed !== '' && Number.isFinite(Number(s.speed))
+            ? { ...s, speed: String(round1(fromKmh(toKmh(Number(s.speed), speedUnit), next))) }
+            : s,
+        ),
+      })),
+    );
+    setSpeedUnit(next);
+  };
+
   const removeExercise = (exKey: string) =>
     setExercises((cur) => cur.filter((ex) => ex.key !== exKey));
 
+  const hasCardio = exercises.some((ex) => ex.kind === 'cardio');
+
   // Live stats from completed sets.
   const doneSets = exercises.flatMap((ex) => ex.sets.filter((s) => s.done));
-  const volume = doneSets.reduce((a, s) => a + (Number(s.weight) || 0) * (Number(s.reps) || 0), 0);
+  const volume = exercises
+    .filter((ex) => ex.kind === 'strength')
+    .flatMap((ex) => ex.sets.filter((s) => s.done))
+    .reduce((a, s) => a + (Number(s.weight) || 0) * (Number(s.reps) || 0), 0);
   const elapsed = Math.max(
     0,
     Math.floor(elapsedBeforePause + (runningSince ? (now - runningSince) / 1000 : 0)),
   );
 
   const finish = async () => {
-    const perEx = exercises.map((ex) => ({ ex, done: ex.sets.filter((s) => s.done) }));
-    if (!perEx.some((d) => d.done.length > 0)) {
-      Alert.alert('Nothing to save', 'Check off at least one set (the ✓), or discard the workout.');
+    const done = exercises.flatMap((ex) => ex.sets.filter((s) => s.done).map((s) => ({ ex, s })));
+    if (done.length === 0) {
+      Alert.alert('Nothing to save', 'Mark at least one set as done (the ✓), or discard the workout.');
       return;
+    }
+    for (const { ex, s } of done) {
+      if (ex.kind === 'strength' && !(Number(s.reps) > 0)) {
+        Alert.alert('Add your reps', `Every completed set of ${ex.name} needs a rep count greater than 0.`);
+        return;
+      }
+      if (ex.kind === 'duration' && !(s.durationSec > 0)) {
+        Alert.alert('Add a duration', `Set a hold time for ${ex.name}.`);
+        return;
+      }
+      if (ex.kind === 'cardio' && !(s.durationSec > 0 || Number(s.speed) > 0)) {
+        Alert.alert('Add your run', `Enter a duration or speed for ${ex.name}.`);
+        return;
+      }
     }
     if (PREVIEW_MODE) {
       Alert.alert('Preview mode', 'Connect Supabase to save workouts.');
@@ -261,21 +357,35 @@ export default function LogWorkoutScreen() {
       return;
     }
     const today = isoDate();
-    // Sets belong to this session (session_id). Each exercise card keeps its own
-    // sets numbered 1..n — no merging across cards — so the session preserves the
-    // full per-exercise detail. A brand-new session id means a plain insert never
-    // collides with anything that already exists.
-    const rows = perEx.flatMap(({ ex, done }) =>
-      done.map((s, i) => ({
-        user_id: userId,
-        exercise_id: ex.id,
-        session_id: sess.id,
-        performed_on: today,
-        set_number: i + 1,
-        weight_kg: s.weight !== '' ? toKg(Number(s.weight), unit) : null,
-        reps: s.reps !== '' ? Number(s.reps) : null,
-      })),
-    );
+    const rows = exercises.flatMap((ex) => {
+      const doneSetsForEx = ex.sets.filter((s) => s.done);
+      return doneSetsForEx.map((s, i) => {
+        const base = {
+          user_id: userId,
+          exercise_id: ex.id,
+          session_id: sess.id,
+          performed_on: today,
+          set_number: i + 1,
+          weight_kg: null as number | null,
+          reps: null as number | null,
+          duration_seconds: null as number | null,
+          incline: null as number | null,
+          speed_kmh: null as number | null,
+        };
+        if (ex.kind === 'strength') {
+          base.weight_kg = s.weight !== '' ? toKg(Number(s.weight), unit) : null;
+          base.reps = s.reps !== '' ? Number(s.reps) : null;
+        } else if (ex.kind === 'duration') {
+          base.duration_seconds = s.durationSec || null;
+        } else {
+          base.duration_seconds = s.durationSec || null;
+          base.incline = s.incline !== '' && Number.isFinite(Number(s.incline)) ? Number(s.incline) : null;
+          base.speed_kmh =
+            s.speed !== '' && Number.isFinite(Number(s.speed)) ? toKmh(Number(s.speed), speedUnit) : null;
+        }
+        return base;
+      });
+    });
     if (rows.length) {
       const { error: e2 } = await supabase.from('workout_sets').insert(rows);
       if (e2) {
@@ -318,7 +428,11 @@ export default function LogWorkoutScreen() {
           ),
         }}
       />
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      <ScrollView
+        ref={scrollRef}
+        contentContainerStyle={styles.content}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag">
         {/* Live stats */}
         <Card>
           <View style={styles.statsRow}>
@@ -337,22 +451,25 @@ export default function LogWorkoutScreen() {
                 {paused ? '▶  Resume' : '⏸  Pause'}
               </ThemedText>
             </Pressable>
-            <View style={[styles.unitToggle, { borderColor: theme.border }]}>
-              {(['kg', 'lbs'] as Unit[]).map((u) => (
-                <Pressable
-                  key={u}
-                  onPress={() => u !== unit && toggleUnit()}
-                  style={[
-                    styles.unitOption,
-                    { backgroundColor: u === unit ? theme.primary : 'transparent' },
-                  ]}>
-                  <ThemedText
-                    type="smallBold"
-                    style={{ color: u === unit ? '#fff' : theme.textSecondary }}>
-                    {u}
-                  </ThemedText>
-                </Pressable>
-              ))}
+            <View style={{ flexDirection: 'row', gap: Spacing.two }}>
+              {hasCardio ? (
+                <Toggle<SpeedUnit>
+                  value={speedUnit}
+                  onChange={(v) => v !== speedUnit && toggleSpeedUnit()}
+                  options={[
+                    { label: 'km/h', value: 'kmph' },
+                    { label: 'mph', value: 'mph' },
+                  ]}
+                />
+              ) : null}
+              <Toggle<Unit>
+                value={unit}
+                onChange={(v) => v !== unit && toggleUnit()}
+                options={[
+                  { label: 'kg', value: 'kg' },
+                  { label: 'lbs', value: 'lbs' },
+                ]}
+              />
             </View>
           </View>
         </Card>
@@ -370,88 +487,34 @@ export default function LogWorkoutScreen() {
               </Pressable>
             </View>
 
-            <View style={styles.tableHead}>
-              <ThemedText type="small" themeColor="textSecondary" style={styles.colSet}>
-                SET
-              </ThemedText>
-              <ThemedText type="small" themeColor="textSecondary" style={styles.colWeight}>
-                {unit.toUpperCase()}
-              </ThemedText>
-              <ThemedText type="small" themeColor="textSecondary" style={styles.colReps}>
-                REPS
-              </ThemedText>
-              <ThemedText type="small" themeColor="textSecondary" style={styles.colCheck}>
-                ✓
-              </ThemedText>
-            </View>
-
-            {ex.sets.map((s, i) => (
-              <View
-                key={i}
-                style={[styles.tableRow, s.done && { backgroundColor: theme.success + '22' }]}>
-                <ThemedText type="smallBold" style={styles.colSet}>
-                  {i + 1}
-                </ThemedText>
-                <View style={styles.weightCell}>
-                  <Pressable
-                    onPress={() => bumpWeight(ex.key, i, -WEIGHT_STEP)}
-                    hitSlop={6}
-                    style={[styles.stepBtn, { borderColor: theme.border }]}>
-                    <ThemedText type="smallBold" style={styles.stepGlyph}>
-                      −
-                    </ThemedText>
-                  </Pressable>
-                  <TextInput
-                    value={s.weight}
-                    onChangeText={(t) => updateSet(ex.key, i, 'weight', sanitizeDecimal(t))}
-                    keyboardType="decimal-pad"
-                    inputMode="decimal"
-                    placeholder={s.prevKg != null ? String(round1(fromKg(s.prevKg, unit))) : '0'}
-                    placeholderTextColor={theme.textSecondary}
-                    style={[styles.cellInput, styles.weightInput, { color: theme.text, borderColor: theme.border }]}
-                  />
-                  <Pressable
-                    onPress={() => bumpWeight(ex.key, i, WEIGHT_STEP)}
-                    hitSlop={6}
-                    style={[styles.stepBtn, { borderColor: theme.border }]}>
-                    <ThemedText type="smallBold" style={styles.stepGlyph}>
-                      ＋
-                    </ThemedText>
-                  </Pressable>
-                </View>
-                <TextInput
-                  value={s.reps}
-                  onChangeText={(t) => updateSet(ex.key, i, 'reps', sanitizeInt(t))}
-                  keyboardType="number-pad"
-                  inputMode="numeric"
-                  placeholder={s.prevReps != null ? String(s.prevReps) : '0'}
-                  placeholderTextColor={theme.textSecondary}
-                  style={[styles.cellInput, styles.colReps, { color: theme.text, borderColor: theme.border }]}
-                />
-                <View style={styles.colCheck}>
-                  <Pressable
-                    onPress={() => toggleDone(ex.key, i)}
-                    style={[
-                      styles.check,
-                      {
-                        backgroundColor: s.done ? theme.success : 'transparent',
-                        borderColor: s.done ? theme.success : theme.border,
-                      },
-                    ]}>
-                    <ThemedText style={{ color: '#fff', fontSize: 14 }}>{s.done ? '✓' : ''}</ThemedText>
-                  </Pressable>
-                </View>
-              </View>
-            ))}
-
-            <Button title="＋ Add Set" variant="secondary" onPress={() => addSet(ex.key)} />
+            {ex.kind === 'strength' ? (
+              <StrengthSets
+                ex={ex}
+                unit={unit}
+                onPatch={patchSet}
+                onToggleDone={toggleDone}
+                onAddSet={addSet}
+                onFocus={handleInputFocus}
+              />
+            ) : ex.kind === 'duration' ? (
+              <DurationSets ex={ex} onPatch={patchSet} onToggleDone={toggleDone} onAddSet={addSet} />
+            ) : (
+              <CardioEntry
+                ex={ex}
+                speedUnit={speedUnit}
+                bodyWeightKg={bodyWeightKg}
+                onPatch={patchSet}
+                onToggleDone={toggleDone}
+                onFocus={handleInputFocus}
+              />
+            )}
           </Card>
         ))}
 
         {exercises.length === 0 ? (
           <Card>
             <ThemedText themeColor="textSecondary" style={{ textAlign: 'center' }}>
-              Add an exercise to start logging your sets.
+              Add an exercise to start logging.
             </ThemedText>
           </Card>
         ) : null}
@@ -459,8 +522,253 @@ export default function LogWorkoutScreen() {
         <Button title="＋ Add Exercise" onPress={() => router.push('/workout/add-exercise')} />
         <Button title="Finish workout" onPress={finish} loading={saving} />
         <Button title="Discard workout" variant="secondary" onPress={discard} />
+        <View style={{ height: keyboardSpacerHeight }} />
       </ScrollView>
     </Screen>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Per-kind set editors
+// ---------------------------------------------------------------------------
+type EditorProps = {
+  ex: LogExercise;
+  onPatch: (exKey: string, idx: number, patch: Partial<SetEntry>) => void;
+  onToggleDone: (exKey: string, idx: number) => void;
+  onAddSet: (exKey: string) => void;
+};
+
+function DoneCheck({ done, onPress }: { done: boolean; onPress: () => void }) {
+  const theme = useTheme();
+  return (
+    <Pressable
+      onPress={onPress}
+      style={[
+        styles.check,
+        { backgroundColor: done ? theme.success : 'transparent', borderColor: done ? theme.success : theme.border },
+      ]}>
+      <ThemedText style={{ color: '#fff', fontSize: 14 }}>{done ? '✓' : ''}</ThemedText>
+    </Pressable>
+  );
+}
+
+function StrengthSets({
+  ex,
+  unit,
+  onPatch,
+  onToggleDone,
+  onAddSet,
+  onFocus,
+}: EditorProps & { unit: Unit; onFocus: (e: any) => void }) {
+  const theme = useTheme();
+  return (
+    <>
+      <View style={styles.tableHead}>
+        <ThemedText type="small" themeColor="textSecondary" style={styles.colSet}>
+          SET
+        </ThemedText>
+        <ThemedText type="small" themeColor="textSecondary" style={styles.colWeight}>
+          {unit.toUpperCase()}
+        </ThemedText>
+        <ThemedText type="small" themeColor="textSecondary" style={styles.colReps}>
+          REPS
+        </ThemedText>
+        <ThemedText type="small" themeColor="textSecondary" style={styles.colCheck}>
+          ✓
+        </ThemedText>
+      </View>
+      {ex.sets.map((s, i) => (
+        <View key={i} style={[styles.tableRow, s.done && { backgroundColor: theme.success + '22' }]}>
+          <ThemedText type="smallBold" style={styles.colSet}>
+            {i + 1}
+          </ThemedText>
+          <StepperInput
+            style={styles.colWeight}
+            value={s.weight}
+            onChangeText={(v) => onPatch(ex.key, i, { weight: v })}
+            onFocus={onFocus}
+            step={5}
+            placeholder={s.prevKg != null ? String(round1(fromKg(s.prevKg, unit))) : '0'}
+          />
+          <StepperInput
+            style={styles.colReps}
+            value={s.reps}
+            onChangeText={(v) => onPatch(ex.key, i, { reps: v })}
+            onFocus={onFocus}
+            step={1}
+            integer
+            placeholder={s.prevReps != null ? String(s.prevReps) : '0'}
+          />
+          <View style={styles.colCheck}>
+            <DoneCheck done={s.done} onPress={() => onToggleDone(ex.key, i)} />
+          </View>
+        </View>
+      ))}
+      <Button title="＋ Add Set" variant="secondary" onPress={() => onAddSet(ex.key)} />
+    </>
+  );
+}
+
+function DurationSets({ ex, onPatch, onToggleDone, onAddSet }: EditorProps) {
+  const theme = useTheme();
+  return (
+    <>
+      <View style={styles.tableHead}>
+        <ThemedText type="small" themeColor="textSecondary" style={styles.colSet}>
+          SET
+        </ThemedText>
+        <ThemedText type="small" themeColor="textSecondary" style={{ flex: 1, textAlign: 'center' }}>
+          HOLD TIME
+        </ThemedText>
+        <ThemedText type="small" themeColor="textSecondary" style={styles.colCheck}>
+          ✓
+        </ThemedText>
+      </View>
+      {ex.sets.map((s, i) => (
+        <View key={i} style={[styles.tableRow, s.done && { backgroundColor: theme.success + '22' }]}>
+          <ThemedText type="smallBold" style={styles.colSet}>
+            {i + 1}
+          </ThemedText>
+          <View style={{ flex: 1 }}>
+            <DurationStepper value={s.durationSec} onChange={(v) => onPatch(ex.key, i, { durationSec: v })} />
+          </View>
+          <View style={styles.colCheck}>
+            <DoneCheck done={s.done} onPress={() => onToggleDone(ex.key, i)} />
+          </View>
+        </View>
+      ))}
+      <Button title="＋ Add Set" variant="secondary" onPress={() => onAddSet(ex.key)} />
+    </>
+  );
+}
+
+function CardioEntry({
+  ex,
+  speedUnit,
+  bodyWeightKg,
+  onPatch,
+  onToggleDone,
+  onFocus,
+}: {
+  ex: LogExercise;
+  speedUnit: SpeedUnit;
+  bodyWeightKg: number | null;
+  onPatch: (exKey: string, idx: number, patch: Partial<SetEntry>) => void;
+  onToggleDone: (exKey: string, idx: number) => void;
+  onFocus: (e: any) => void;
+}) {
+  const theme = useTheme();
+  const s = ex.sets[0];
+  const speedKmh = s.speed !== '' && Number.isFinite(Number(s.speed)) ? toKmh(Number(s.speed), speedUnit) : 0;
+  const inc = s.incline !== '' && Number.isFinite(Number(s.incline)) ? Number(s.incline) : 0;
+  const distKm = distanceKm(speedKmh, s.durationSec);
+  const distShown = speedUnit === 'kmph' ? distKm : distKm * 0.621371;
+  const cal = estimateCalories({ durationSec: s.durationSec, speedKmh, incline: inc, weightKg: bodyWeightKg });
+
+  return (
+    <View style={{ gap: Spacing.two }}>
+      <CardioRow label="Duration">
+        <DurationStepper value={s.durationSec} onChange={(v) => onPatch(ex.key, 0, { durationSec: v })} />
+      </CardioRow>
+      <CardioRow label={`Speed (${speedUnit === 'kmph' ? 'km/h' : 'mph'})`}>
+        <StepperInput
+          value={s.speed}
+          onChangeText={(v) => onPatch(ex.key, 0, { speed: v })}
+          onFocus={onFocus}
+          step={0.5}
+          placeholder="0"
+        />
+      </CardioRow>
+      <CardioRow label="Incline (%)">
+        <StepperInput
+          value={s.incline}
+          onChangeText={(v) => onPatch(ex.key, 0, { incline: v })}
+          onFocus={onFocus}
+          step={1}
+          placeholder="0"
+        />
+      </CardioRow>
+
+      {s.durationSec > 0 || speedKmh > 0 ? (
+        <View style={[styles.estRow, { borderColor: theme.border }]}>
+          <ThemedText type="small" themeColor="textSecondary">
+            {distKm > 0 ? `≈ ${round1(distShown)} ${speedUnit === 'kmph' ? 'km' : 'mi'}` : '—'}
+          </ThemedText>
+          <ThemedText type="small" themeColor="textSecondary">
+            {cal > 0 ? `≈ ${cal} kcal` : '—'}
+          </ThemedText>
+        </View>
+      ) : null}
+
+      <Pressable
+        onPress={() => onToggleDone(ex.key, 0)}
+        style={[
+          styles.includeRow,
+          { borderColor: s.done ? theme.success : theme.border, backgroundColor: s.done ? theme.success + '18' : 'transparent' },
+        ]}>
+        <DoneCheck done={s.done} onPress={() => onToggleDone(ex.key, 0)} />
+        <ThemedText type="smallBold">{s.done ? 'Included in workout' : 'Tap to include this run'}</ThemedText>
+      </Pressable>
+    </View>
+  );
+}
+
+function CardioRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <View style={styles.cardioRow}>
+      <ThemedText type="small" themeColor="textSecondary" style={{ width: 96 }}>
+        {label}
+      </ThemedText>
+      <View style={{ flex: 1 }}>{children}</View>
+    </View>
+  );
+}
+
+function DurationStepper({ value, onChange }: { value: number; onChange: (v: number) => void }) {
+  const theme = useTheme();
+  const bump = (d: number) => onChange(Math.max(0, value + d));
+  return (
+    <View style={[styles.durWrap, { borderColor: theme.border, backgroundColor: theme.background }]}>
+      <Pressable
+        onPress={() => bump(-15)}
+        hitSlop={6}
+        style={[styles.durBtn, { borderRightColor: theme.border, borderRightWidth: StyleSheet.hairlineWidth }]}>
+        <ThemedText style={[styles.durGlyph, { color: theme.primary }]}>−</ThemedText>
+      </Pressable>
+      <ThemedText style={[styles.durVal, { color: theme.text }]}>{formatDuration(value)}</ThemedText>
+      <Pressable
+        onPress={() => bump(15)}
+        hitSlop={6}
+        style={[styles.durBtn, { borderLeftColor: theme.border, borderLeftWidth: StyleSheet.hairlineWidth }]}>
+        <ThemedText style={[styles.durGlyph, { color: theme.primary }]}>＋</ThemedText>
+      </Pressable>
+    </View>
+  );
+}
+
+function Toggle<T extends string>({
+  value,
+  onChange,
+  options,
+}: {
+  value: T;
+  onChange: (v: T) => void;
+  options: { label: string; value: T }[];
+}) {
+  const theme = useTheme();
+  return (
+    <View style={[styles.unitToggle, { borderColor: theme.border }]}>
+      {options.map((o) => (
+        <Pressable
+          key={o.value}
+          onPress={() => onChange(o.value)}
+          style={[styles.unitOption, { backgroundColor: o.value === value ? theme.primary : 'transparent' }]}>
+          <ThemedText type="smallBold" style={{ color: o.value === value ? '#fff' : theme.textSecondary }}>
+            {o.label}
+          </ThemedText>
+        </Pressable>
+      ))}
+    </View>
   );
 }
 
@@ -492,7 +800,7 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     overflow: 'hidden',
   },
-  unitOption: { paddingHorizontal: Spacing.three, paddingVertical: Spacing.one + 2 },
+  unitOption: { paddingHorizontal: Spacing.two + 2, paddingVertical: Spacing.one + 2 },
   pauseBtn: {
     paddingHorizontal: Spacing.three,
     paddingVertical: Spacing.one + 3,
@@ -504,33 +812,14 @@ const styles = StyleSheet.create({
   tableRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 6,
     paddingVertical: Spacing.one,
     borderRadius: Spacing.one,
   },
-  colSet: { width: 30, textAlign: 'center' },
-  colWeight: { flex: 1.7, textAlign: 'center' },
-  colReps: { flex: 1 },
-  colCheck: { width: 44, alignItems: 'center' },
-  weightCell: { flex: 1.7, flexDirection: 'row', alignItems: 'center', gap: 4 },
-  stepBtn: {
-    width: 30,
-    height: 40,
-    borderRadius: 8,
-    borderWidth: StyleSheet.hairlineWidth,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  stepGlyph: { fontSize: 18, lineHeight: 20 },
-  cellInput: {
-    marginHorizontal: 4,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: Spacing.one + 2,
-    paddingVertical: Spacing.two,
-    textAlign: 'center',
-    fontSize: 15,
-    minHeight: 40,
-  },
-  weightInput: { flex: 1, marginHorizontal: 0 },
+  colSet: { width: 24, textAlign: 'center' },
+  colWeight: { flex: 1, textAlign: 'center' },
+  colReps: { flex: 1, textAlign: 'center' },
+  colCheck: { width: 40, alignItems: 'center' },
   check: {
     width: 30,
     height: 30,
@@ -539,4 +828,32 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  cardioRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two, marginTop: Spacing.one },
+  estRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingTop: Spacing.two,
+    marginTop: Spacing.one,
+  },
+  includeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    padding: Spacing.two,
+    borderRadius: Spacing.two,
+    borderWidth: StyleSheet.hairlineWidth,
+    marginTop: Spacing.one,
+  },
+  durWrap: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 12,
+    overflow: 'hidden',
+    minHeight: 48,
+  },
+  durBtn: { width: 44, alignItems: 'center', justifyContent: 'center' },
+  durGlyph: { fontSize: 22, lineHeight: 26, fontWeight: '800' },
+  durVal: { flex: 1, textAlign: 'center', fontSize: 17, fontWeight: '700', alignSelf: 'center' },
 });

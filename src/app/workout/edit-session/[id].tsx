@@ -1,14 +1,16 @@
 import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
+import { StepperInput } from '@/components/stepper-input';
 import { ThemedText } from '@/components/themed-text';
 import { Button, Card, Screen } from '@/components/ui';
 import { Spacing } from '@/constants/theme';
+import { useKeyboardAwareScroll } from '@/hooks/use-keyboard-aware-scroll';
 import { useTheme } from '@/hooks/use-theme';
+import { useAuth } from '@/lib/auth';
 import { BODY_PART_META } from '@/lib/bodyparts';
 import { isoDate } from '@/lib/date';
-import { sanitizeDecimal, sanitizeInt } from '@/lib/num';
 import { takePendingExercise } from '@/lib/pendingExercise';
 import { requireUserId, supabase } from '@/lib/supabase';
 import type { BodyPart, Unit, WorkoutSet } from '@/lib/types';
@@ -27,13 +29,12 @@ type EditSet = {
 };
 type EditExercise = { key: string; id: string; name: string; bodyPart: BodyPart; sets: EditSet[] };
 
-const WEIGHT_STEP = 5;
 let keySeq = 0;
 const newKey = () => `k${Date.now()}-${keySeq++}`;
 const emptySet = (): EditSet => ({
   key: newKey(),
   weight: '',
-  reps: '',
+  reps: '15',
   duration_seconds: null,
   incline: null,
   speed_kmh: null,
@@ -42,6 +43,9 @@ const emptySet = (): EditSet => ({
 export default function EditSessionScreen() {
   const theme = useTheme();
   const router = useRouter();
+  const { session } = useAuth();
+  const uid = session?.user.id;
+  const { scrollRef, handleInputFocus, keyboardSpacerHeight } = useKeyboardAwareScroll();
   const { id } = useLocalSearchParams<{ id: string }>();
 
   const [unit, setUnit] = useState<Unit>('kg');
@@ -56,16 +60,22 @@ export default function EditSessionScreen() {
 
   // Load the session's sets, grouped by exercise, into editable rows.
   useEffect(() => {
-    if (!id) return;
+    if (!id || !uid) return;
     let active = true;
     (async () => {
       const [profileRes, sessRes, setsRes] = await Promise.all([
-        supabase.from('profiles').select('unit_pref').maybeSingle(),
-        supabase.from('workout_sessions').select('started_at').eq('id', id).maybeSingle(),
+        supabase.from('profiles').select('unit_pref').eq('user_id', uid).maybeSingle(),
+        supabase
+          .from('workout_sessions')
+          .select('started_at')
+          .eq('id', id)
+          .eq('user_id', uid)
+          .maybeSingle(),
         supabase
           .from('workout_sets')
           .select('*, exercises(name, body_part)')
           .eq('session_id', id)
+          .eq('user_id', uid)
           .order('set_number', { ascending: true }),
       ]);
       if (!active) return;
@@ -101,7 +111,7 @@ export default function EditSessionScreen() {
     return () => {
       active = false;
     };
-  }, [id]);
+  }, [id, uid]);
 
   // Add an exercise picked from the picker on return.
   const addExercise = useCallback((exId: string, name: string, bodyPart: string) => {
@@ -122,22 +132,6 @@ export default function EditSessionScreen() {
       cur.map((ex) =>
         ex.key === exKey
           ? { ...ex, sets: ex.sets.map((s, i) => (i === idx ? { ...s, [field]: value } : s)) }
-          : ex,
-      ),
-    );
-
-  const bumpWeight = (exKey: string, idx: number, delta: number) =>
-    setExercises((cur) =>
-      cur.map((ex) =>
-        ex.key === exKey
-          ? {
-              ...ex,
-              sets: ex.sets.map((s, i) =>
-                i === idx
-                  ? { ...s, weight: String(Math.max(0, round1((Number(s.weight) || 0) + delta))) }
-                  : s,
-              ),
-            }
           : ex,
       ),
     );
@@ -180,6 +174,14 @@ export default function EditSessionScreen() {
   };
 
   const save = async () => {
+    // Every strength set needs a real rep count (cardio sets are exempt).
+    const hasZeroReps = exercises.some(
+      (ex) => ex.bodyPart !== 'cardio' && ex.sets.some((s) => !(Number(s.reps) > 0)),
+    );
+    if (hasZeroReps) {
+      Alert.alert('Add your reps', 'Every set needs a rep count greater than 0.');
+      return;
+    }
     setSaving(true);
     let userId: string;
     try {
@@ -206,7 +208,11 @@ export default function EditSessionScreen() {
       })),
     );
 
-    const { error: delErr } = await supabase.from('workout_sets').delete().eq('session_id', id);
+    const { error: delErr } = await supabase
+      .from('workout_sets')
+      .delete()
+      .eq('session_id', id)
+      .eq('user_id', userId);
     if (delErr) {
       setSaving(false);
       Alert.alert('Could not save', delErr.message);
@@ -238,7 +244,11 @@ export default function EditSessionScreen() {
           ),
         }}
       />
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      <ScrollView
+        ref={scrollRef}
+        contentContainerStyle={styles.content}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag">
         <View style={styles.topRow}>
           <ThemedText type="small" themeColor="textSecondary" style={{ flex: 1 }}>
             Editing set details only — the session’s time and duration stay the same.
@@ -290,41 +300,22 @@ export default function EditSessionScreen() {
                   <ThemedText type="smallBold" style={styles.colSet}>
                     {i + 1}
                   </ThemedText>
-                  <View style={styles.weightCell}>
-                    <Pressable
-                      onPress={() => bumpWeight(ex.key, i, -WEIGHT_STEP)}
-                      hitSlop={6}
-                      style={[styles.stepBtn, { borderColor: theme.border }]}>
-                      <ThemedText type="smallBold" style={styles.stepGlyph}>
-                        −
-                      </ThemedText>
-                    </Pressable>
-                    <TextInput
-                      value={s.weight}
-                      onChangeText={(t) => updateSet(ex.key, i, 'weight', sanitizeDecimal(t))}
-                      keyboardType="decimal-pad"
-                      inputMode="decimal"
-                      placeholder="0"
-                      placeholderTextColor={theme.textSecondary}
-                      style={[styles.cellInput, styles.weightInput, { color: theme.text, borderColor: theme.border }]}
-                    />
-                    <Pressable
-                      onPress={() => bumpWeight(ex.key, i, WEIGHT_STEP)}
-                      hitSlop={6}
-                      style={[styles.stepBtn, { borderColor: theme.border }]}>
-                      <ThemedText type="smallBold" style={styles.stepGlyph}>
-                        ＋
-                      </ThemedText>
-                    </Pressable>
-                  </View>
-                  <TextInput
-                    value={s.reps}
-                    onChangeText={(t) => updateSet(ex.key, i, 'reps', sanitizeInt(t))}
-                    keyboardType="number-pad"
-                    inputMode="numeric"
+                  <StepperInput
+                    style={styles.colWeight}
+                    value={s.weight}
+                    onChangeText={(v) => updateSet(ex.key, i, 'weight', v)}
+                    onFocus={handleInputFocus}
+                    step={5}
                     placeholder="0"
-                    placeholderTextColor={theme.textSecondary}
-                    style={[styles.cellInput, styles.colReps, { color: theme.text, borderColor: theme.border }]}
+                  />
+                  <StepperInput
+                    style={styles.colReps}
+                    value={s.reps}
+                    onChangeText={(v) => updateSet(ex.key, i, 'reps', v)}
+                    onFocus={handleInputFocus}
+                    step={1}
+                    integer
+                    placeholder="0"
                   />
                   <Pressable onPress={() => removeSet(ex.key, i)} hitSlop={8} style={styles.colDel}>
                     <ThemedText type="smallBold" themeColor="danger">
@@ -349,6 +340,8 @@ export default function EditSessionScreen() {
 
         <Button title="＋ Add Exercise" onPress={() => router.push('/workout/add-exercise')} />
         <Button title="Save changes" onPress={save} loading={saving} />
+        {/* Room to scroll the last set above the keyboard. */}
+        <View style={{ height: keyboardSpacerHeight }} />
       </ScrollView>
     </Screen>
   );
@@ -365,30 +358,10 @@ const styles = StyleSheet.create({
   },
   unitOption: { paddingHorizontal: Spacing.three, paddingVertical: Spacing.one },
   exHeader: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
-  tableHead: { flexDirection: 'row', alignItems: 'center', paddingTop: Spacing.one },
-  tableRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: Spacing.one },
-  colSet: { width: 30, textAlign: 'center' },
-  colWeight: { flex: 1.7, textAlign: 'center' },
-  colReps: { flex: 1 },
-  colDel: { width: 36, alignItems: 'center' },
-  weightCell: { flex: 1.7, flexDirection: 'row', alignItems: 'center', gap: 4 },
-  stepBtn: {
-    width: 30,
-    height: 40,
-    borderRadius: 8,
-    borderWidth: StyleSheet.hairlineWidth,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  stepGlyph: { fontSize: 18, lineHeight: 20 },
-  cellInput: {
-    marginHorizontal: 4,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: Spacing.one + 2,
-    paddingVertical: Spacing.two,
-    textAlign: 'center',
-    fontSize: 15,
-    minHeight: 40,
-  },
-  weightInput: { flex: 1, marginHorizontal: 0 },
+  tableHead: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingTop: Spacing.one },
+  tableRow: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: Spacing.one },
+  colSet: { width: 24, textAlign: 'center' },
+  colWeight: { flex: 1, textAlign: 'center' },
+  colReps: { flex: 1, textAlign: 'center' },
+  colDel: { width: 32, alignItems: 'center' },
 });

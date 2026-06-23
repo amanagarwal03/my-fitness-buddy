@@ -7,6 +7,7 @@ import { ThemedText } from '@/components/themed-text';
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { useAuth } from '@/lib/auth';
+import { supabase } from '@/lib/supabase';
 
 type SideNavContextValue = { open: () => void };
 const SideNavContext = createContext<SideNavContextValue>({ open: () => {} });
@@ -32,8 +33,22 @@ export function SideNavProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
   const { session, signOut } = useAuth();
   const [visible, setVisible] = useState(false);
+  const [firstName, setFirstName] = useState<string | null>(null);
 
-  const open = useCallback(() => setVisible(true), []);
+  // Refresh the greeting name each time the nav opens (so it reflects edits made
+  // on the profile screen). Scoped to the signed-in user.
+  const open = useCallback(() => {
+    setVisible(true);
+    const uid = session?.user.id;
+    if (uid) {
+      supabase
+        .from('profiles')
+        .select('first_name')
+        .eq('user_id', uid)
+        .maybeSingle()
+        .then(({ data }) => setFirstName((data?.first_name as string) ?? null));
+    }
+  }, [session?.user.id]);
   const close = useCallback(() => setVisible(false), []);
 
   const go = (path: string) => {
@@ -66,9 +81,13 @@ export function SideNavProvider({ children }: { children: ReactNode }) {
             <SafeAreaView edges={['top', 'bottom']} style={{ flex: 1 }}>
               <View style={styles.header}>
                 <ThemedText type="title" style={{ fontSize: 22 }}>
-                  My Fitness Buddy
+                  {firstName ? `Hello, ${firstName} 👋` : 'My Fitness Buddy'}
                 </ThemedText>
-                {session?.user.email ? (
+                {firstName ? (
+                  <ThemedText type="small" themeColor="textSecondary">
+                    My Fitness Buddy
+                  </ThemedText>
+                ) : session?.user.email ? (
                   <ThemedText type="small" themeColor="textSecondary" numberOfLines={1}>
                     {session.user.email}
                   </ThemedText>

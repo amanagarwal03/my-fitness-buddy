@@ -10,16 +10,19 @@ import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { useAuth } from '@/lib/auth';
 import { bmiCategory, computeBmi } from '@/lib/bmi';
+import { ageFromDob, formatDobInput } from '@/lib/date';
 import { requireUserId, supabase } from '@/lib/supabase';
 import type { Unit } from '@/lib/types';
 import { toKg } from '@/lib/units';
+
+type Gender = 'male' | 'female' | 'other';
 
 const DEFAULT_GOALS = { calories: '2000', protein_g: '150', carbs_g: '200', fat_g: '65' };
 const TOTAL_STEPS = 3;
 
 const STEP_META = [
   { emoji: '👋', title: 'Welcome', subtitle: 'Let’s set up your fitness buddy' },
-  { emoji: '📏', title: 'About you', subtitle: 'Height & weight for your BMI' },
+  { emoji: '📏', title: 'About you', subtitle: 'A few details & your BMI basics' },
   { emoji: '🎯', title: 'Daily goals', subtitle: 'Set your nutrition targets' },
 ];
 
@@ -35,6 +38,10 @@ export default function OnboardingScreen() {
   const { session, refreshOnboarding, markOnboarded, signOut } = useAuth();
 
   const [step, setStep] = useState(0);
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [dob, setDob] = useState('');
+  const [sex, setSex] = useState<Gender | null>(null);
   const [unit, setUnit] = useState<Unit>('kg');
   const [heightCm, setHeightCm] = useState('');
   const [weightInput, setWeightInput] = useState('');
@@ -88,6 +95,11 @@ export default function OnboardingScreen() {
     const [pErr, gErr] = await Promise.all([
       supabase.from('profiles').upsert({
         user_id: userId,
+        first_name: firstName.trim() || null,
+        last_name: lastName.trim() || null,
+        dob: dob || null,
+        age: ageFromDob(dob),
+        sex,
         height_cm: heightNum,
         weight_kg: weightKg,
         unit_pref: unit,
@@ -180,6 +192,60 @@ export default function OnboardingScreen() {
 
           {step === 1 ? (
             <Card style={{ gap: Spacing.three }}>
+              <ThemedText type="smallBold" themeColor="textSecondary">
+                YOUR DETAILS
+              </ThemedText>
+              <View style={styles.nameRow}>
+                <View style={{ flex: 1 }}>
+                  <Field
+                    label="First name"
+                    value={firstName}
+                    onChangeText={setFirstName}
+                    onFocus={handleFieldFocus}
+                    autoCapitalize="words"
+                    placeholder="Alex"
+                  />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Field
+                    label="Last name"
+                    value={lastName}
+                    onChangeText={setLastName}
+                    onFocus={handleFieldFocus}
+                    autoCapitalize="words"
+                    placeholder="Carter"
+                  />
+                </View>
+              </View>
+              <Field
+                label="Date of birth"
+                keyboardType="number-pad"
+                inputMode="numeric"
+                value={dob}
+                onChangeText={(t) => setDob(formatDobInput(t))}
+                onFocus={handleFieldFocus}
+                placeholder="YYYY-MM-DD"
+                maxLength={10}
+              />
+              {ageFromDob(dob) != null ? (
+                <ThemedText type="small" themeColor="textSecondary">
+                  Age: {ageFromDob(dob)}
+                </ThemedText>
+              ) : null}
+              <View style={{ gap: Spacing.one }}>
+                <ThemedText type="small" themeColor="textSecondary">
+                  Gender
+                </ThemedText>
+                <SegmentedControl<Gender>
+                  value={(sex ?? '') as Gender}
+                  onChange={setSex}
+                  options={[
+                    { label: 'Male', value: 'male' },
+                    { label: 'Female', value: 'female' },
+                    { label: 'Other', value: 'other' },
+                  ]}
+                />
+              </View>
               <ThemedText type="smallBold" themeColor="textSecondary">
                 PREFERRED WEIGHT UNIT
               </ThemedText>
@@ -313,6 +379,7 @@ const styles = StyleSheet.create({
   },
   progressSeg: { flex: 1, height: 5, borderRadius: 3 },
   body: { padding: Spacing.four, gap: Spacing.four },
+  nameRow: { flexDirection: 'row', gap: Spacing.two },
   point: { flexDirection: 'row', alignItems: 'center', gap: Spacing.three },
   pointIcon: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   bmiPill: {

@@ -19,6 +19,7 @@ import { ThemedText } from '@/components/themed-text';
 import { Card, ProgressBar, Screen } from '@/components/ui';
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
+import { useAuth } from '@/lib/auth';
 import { analyzeMeal } from '@/lib/analyzeMeal';
 import { isoDate } from '@/lib/date';
 import { captureFromCamera, pickFromLibrary } from '@/lib/image';
@@ -55,6 +56,8 @@ function dayLabel(d: Date): string {
 export default function NutritionScreen() {
   const theme = useTheme();
   const router = useRouter();
+  const { session } = useAuth();
+  const uid = session?.user.id;
   const [meals, setMeals] = useState<Meal[]>([]);
   const [goals, setGoals] = useState<NutritionGoals | null>(null);
   const [loading, setLoading] = useState(true);
@@ -74,6 +77,7 @@ export default function NutritionScreen() {
       setLoading(false);
       return;
     }
+    if (!uid) return;
     setLoading(true);
     // Use the selected day's LOCAL midnight bounds (converted to UTC) so meals
     // logged in the evening don't fall outside the window.
@@ -81,14 +85,18 @@ export default function NutritionScreen() {
     dayStart.setHours(0, 0, 0, 0);
     const dayEnd = new Date(selectedDate);
     dayEnd.setHours(23, 59, 59, 999);
+    // Always scope to the signed-in user. The coach-sharing RLS policy lets a
+    // viewer SELECT a shared owner's rows too, so an unscoped query would mix
+    // another account's meals into this user's diary.
     const [mealsRes, goalsRes] = await Promise.all([
       supabase
         .from('meals')
         .select('*')
+        .eq('user_id', uid)
         .gte('eaten_at', dayStart.toISOString())
         .lte('eaten_at', dayEnd.toISOString())
         .order('eaten_at', { ascending: false }),
-      supabase.from('nutrition_goals').select('*').maybeSingle(),
+      supabase.from('nutrition_goals').select('*').eq('user_id', uid).maybeSingle(),
     ]);
     if (!mealsRes.error && mealsRes.data) {
       const list = mealsRes.data as Meal[];
@@ -98,21 +106,23 @@ export default function NutritionScreen() {
     }
     if (!goalsRes.error) setGoals((goalsRes.data as NutritionGoals) ?? null);
     setLoading(false);
-  }, [selectedDate]);
+  }, [selectedDate, uid]);
 
   const loadMarks = useCallback(async () => {
     if (PREVIEW_MODE) {
       setMarkedDays(new Set(previewMeals.map((m) => isoDate(new Date(m.eaten_at)))));
       return;
     }
+    if (!uid) return;
     const since = new Date();
     since.setDate(since.getDate() - 120);
     const { data } = await supabase
       .from('meals')
       .select('eaten_at')
+      .eq('user_id', uid)
       .gte('eaten_at', since.toISOString());
     if (data) setMarkedDays(new Set(data.map((r: { eaten_at: string }) => isoDate(new Date(r.eaten_at)))));
-  }, []);
+  }, [uid]);
 
   useFocusEffect(
     useCallback(() => {
@@ -169,7 +179,9 @@ export default function NutritionScreen() {
         text: 'Delete',
         style: 'destructive',
         onPress: async () => {
-          await supabase.from('meals').delete().eq('id', id);
+          let q = supabase.from('meals').delete().eq('id', id);
+          if (uid) q = q.eq('user_id', uid);
+          await q;
           load();
         },
       },
