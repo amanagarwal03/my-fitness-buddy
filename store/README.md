@@ -12,10 +12,9 @@ finishes verification. Files in this folder:
 
 ## 📦 Your built app (AAB to upload)
 
-- **Production AAB (upload this to Play Console):**
-  https://expo.dev/artifacts/eas/B9LHzTdJL3QUDV5hEQlO4c1-QVlgz9ZXzQyLORdHbbw.aab
-- **Preview APK (sideload for direct testing):**
-  https://expo.dev/artifacts/eas/g6wj7EzgxWwYgecnW-5looLtD9abXjTvwTeyQw8bZ7A.apk
+- **Production AAB (upload this to Play Console) — versionCode 3, all latest fixes:**
+  https://expo.dev/artifacts/eas/t9ppzLRFOaN_RRQRns9NaYf24irhB5jcqEUE0Yv4sXQ.aab
+  (build details: https://expo.dev/accounts/amanagarwal03/projects/myfitnessbuddy/builds/51fc4b34-4e3a-4ee1-a2e3-4c060d8bcbe6)
 - All builds (durable links, re-download anytime):
   https://expo.dev/accounts/amanagarwal03/projects/myfitnessbuddy/builds
 
