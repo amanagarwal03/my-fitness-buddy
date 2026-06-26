@@ -1,20 +1,23 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Switch, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import { showAlert } from '@/lib/dialog';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { DobPicker } from '@/components/dob-picker';
+import { GenderSelect } from '@/components/gender-select';
 import { useSideNav } from '@/components/side-nav';
 import { ThemedText } from '@/components/themed-text';
 import { Button, Card, Field, Screen, SegmentedControl } from '@/components/ui';
 import { Spacing } from '@/constants/theme';
 import { useKeyboardAwareScroll } from '@/hooks/use-keyboard-aware-scroll';
+import { useResponsive } from '@/hooks/use-responsive';
 import { useTheme } from '@/hooks/use-theme';
 import { useAuth } from '@/lib/auth';
 import { bmiCategory, computeBmi, type BmiCategory } from '@/lib/bmi';
-import { ageFromDob, formatDobInput } from '@/lib/date';
+import { ageFromDob } from '@/lib/date';
 import { sanitizeDecimal } from '@/lib/num';
 import { PREVIEW_MODE, previewProfile } from '@/lib/preview';
 import { requireUserId, supabase } from '@/lib/supabase';
@@ -42,16 +45,13 @@ export default function ProfileScreen() {
   const theme = useTheme();
   const router = useRouter();
   const { session, signOut } = useAuth();
-  const { scrollRef, handleInputFocus, keyboardSpacerHeight } = useKeyboardAwareScroll();
+  const { scrollRef, handleInputFocus, keyboardSpacerHeight, keyboardDismissMode } =
+    useKeyboardAwareScroll();
   const [unit, setUnit] = useState<Unit>('kg');
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [dob, setDob] = useState(''); // YYYY-MM-DD
   const [sex, setSex] = useState<Gender | null>(null);
-  // What a coach sees on the shared profile (name on by default; age/gender off).
-  const [shareName, setShareName] = useState(true);
-  const [shareAge, setShareAge] = useState(false);
-  const [shareGender, setShareGender] = useState(false);
   const [heightCm, setHeightCm] = useState('');
   const [weightInput, setWeightInput] = useState(''); // shown in current unit
   const [loading, setLoading] = useState(true);
@@ -59,7 +59,6 @@ export default function ProfileScreen() {
   const [deleting, setDeleting] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [measureOpen, setMeasureOpen] = useState(false);
-  const [sharingOpen, setSharingOpen] = useState(false);
   // Snapshot of the last-persisted values, so auto-save only writes real edits
   // (and never re-saves the data we just loaded). Set in load() and after a save.
   const savedSnapshot = useRef<string>('');
@@ -73,14 +72,11 @@ export default function ProfileScreen() {
         lastName,
         dob,
         sex,
-        shareName,
-        shareAge,
-        shareGender,
         heightCm,
         weightInput,
         unit,
       }),
-    [firstName, lastName, dob, sex, shareName, shareAge, shareGender, heightCm, weightInput, unit],
+    [firstName, lastName, dob, sex, heightCm, weightInput, unit],
   );
 
   const load = useCallback(async () => {
@@ -98,9 +94,6 @@ export default function ProfileScreen() {
       lastName: p?.last_name ?? '',
       dob: p?.dob ?? '',
       sex: p?.sex ?? null,
-      shareName: p?.share_name ?? true,
-      shareAge: p?.share_age ?? false,
-      shareGender: p?.share_gender ?? false,
       heightCm: p?.height_cm ? String(p.height_cm) : '',
       weightInput: p?.weight_kg != null ? String(round1(fromKg(p.weight_kg, u))) : '',
       unit: u,
@@ -110,9 +103,6 @@ export default function ProfileScreen() {
     setLastName(next.lastName);
     setDob(next.dob);
     setSex(next.sex);
-    setShareName(next.shareName);
-    setShareAge(next.shareAge);
-    setShareGender(next.shareGender);
     setHeightCm(next.heightCm);
     setWeightInput(next.weightInput);
     // Record what's now on screen as the saved baseline so auto-save stays quiet
@@ -155,9 +145,6 @@ export default function ProfileScreen() {
         // Keep the denormalised age column in sync so it stays accurate over time.
         age: ageFromDob(dob),
         sex,
-        share_name: shareName,
-        share_age: shareAge,
-        share_gender: shareGender,
         height_cm: heightCm !== '' ? Number(heightCm) : null,
         weight_kg: weightInput !== '' ? toKg(Number(weightInput), unit) : null,
         unit_pref: unit,
@@ -177,9 +164,6 @@ export default function ProfileScreen() {
     lastName,
     dob,
     sex,
-    shareName,
-    shareAge,
-    shareGender,
     heightCm,
     weightInput,
     unit,
@@ -250,12 +234,6 @@ export default function ProfileScreen() {
           .filter(Boolean)
           .join('  ·  ')
       : 'Add your height & weight';
-  const shownBits = [
-    shareName ? 'name' : '',
-    shareAge ? 'age' : '',
-    shareGender ? 'gender' : '',
-  ].filter(Boolean);
-  const sharingSummary = shownBits.length ? `Coach sees ${shownBits.join(', ')}` : 'Coach sees nothing';
 
   return (
     <Screen edges={[]}>
@@ -263,7 +241,7 @@ export default function ProfileScreen() {
         ref={scrollRef}
         contentContainerStyle={{ paddingBottom: Spacing.six }}
         keyboardShouldPersistTaps="handled"
-        keyboardDismissMode="on-drag"
+        keyboardDismissMode={keyboardDismissMode}
         showsVerticalScrollIndicator={false}>
         {/* ---------- Gradient identity hero ---------- */}
         <LinearGradient
@@ -349,6 +327,26 @@ export default function ProfileScreen() {
             )}
           </Pressable>
 
+          {/* ---------- Body composition CTA ---------- */}
+          <Pressable onPress={() => router.push('/(tabs)/body')}>
+            {({ pressed }) => (
+              <Card style={[styles.metricsCta, { opacity: pressed ? 0.9 : 1 }]}>
+                <View style={[styles.metricsIcon, { backgroundColor: theme.primary + '22' }]}>
+                  <ThemedText style={{ fontSize: 22 }}>📊</ThemedText>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <ThemedText type="smallBold">Body composition & metrics</ThemedText>
+                  <ThemedText type="small" themeColor="textSecondary">
+                    Measurements, body fat, BMR & a calorie target
+                  </ThemedText>
+                </View>
+                <ThemedText type="smallBold" themeColor="textSecondary" style={{ fontSize: 18 }}>
+                  ›
+                </ThemedText>
+              </Card>
+            )}
+          </Pressable>
+
           {/* ---------- Editors ---------- */}
           <CollapsibleCard
             icon="🧑"
@@ -378,36 +376,13 @@ export default function ProfileScreen() {
                 />
               </View>
             </View>
-            <Field
-              label="Date of birth"
-              keyboardType="number-pad"
-              inputMode="numeric"
-              value={dob}
-              onChangeText={(t) => setDob(formatDobInput(t))}
-              onFocus={handleInputFocus}
-              editable={!loading}
-              placeholder="YYYY-MM-DD"
-              maxLength={10}
-            />
+            <DobPicker value={dob} onChange={setDob} disabled={loading} />
             {computedAge != null ? (
               <ThemedText type="small" themeColor="textSecondary">
                 Age: {computedAge}
               </ThemedText>
             ) : null}
-            <View style={{ gap: Spacing.one }}>
-              <ThemedText type="small" themeColor="textSecondary">
-                Gender
-              </ThemedText>
-              <SegmentedControl<Gender>
-                value={(sex ?? '') as Gender}
-                onChange={setSex}
-                options={[
-                  { label: 'Male', value: 'male' },
-                  { label: 'Female', value: 'female' },
-                  { label: 'Other', value: 'other' },
-                ]}
-              />
-            </View>
+            <GenderSelect value={sex} onChange={setSex} />
           </CollapsibleCard>
 
           <CollapsibleCard
@@ -448,25 +423,6 @@ export default function ProfileScreen() {
               onFocus={handleInputFocus}
               editable={!loading}
               placeholder={unit === 'kg' ? '70' : '154'}
-            />
-          </CollapsibleCard>
-
-          <CollapsibleCard
-            icon="🤝"
-            title="Coach sharing"
-            summary={sharingSummary}
-            open={sharingOpen}
-            onToggle={() => setSharingOpen((o) => !o)}>
-            <ThemedText type="small" themeColor="textSecondary">
-              Choose what a coach sees on your shared profile.
-            </ThemedText>
-            <ToggleRow label="Show my name" value={shareName} onValueChange={setShareName} disabled={loading} />
-            <ToggleRow label="Show my age" value={shareAge} onValueChange={setShareAge} disabled={loading} />
-            <ToggleRow
-              label="Show my gender"
-              value={shareGender}
-              onValueChange={setShareGender}
-              disabled={loading}
             />
           </CollapsibleCard>
 
@@ -515,6 +471,8 @@ export default function ProfileScreen() {
 
 function HeroMenuButton() {
   const { open } = useSideNav();
+  const { isDesktop } = useResponsive();
+  if (isDesktop) return null;
   return (
     <Pressable onPress={open} hitSlop={10} style={styles.heroMenu}>
       <ThemedText style={{ fontSize: 22, color: '#fff' }}>☰</ThemedText>
@@ -683,28 +641,6 @@ function CollapsibleCard({
   );
 }
 
-function ToggleRow({
-  label,
-  value,
-  onValueChange,
-  disabled,
-}: {
-  label: string;
-  value: boolean;
-  onValueChange: (v: boolean) => void;
-  disabled?: boolean;
-}) {
-  const theme = useTheme();
-  return (
-    <View style={styles.toggleRow}>
-      <ThemedText type="smallBold" style={{ flex: 1 }}>
-        {label}
-      </ThemedText>
-      <Switch value={value} onValueChange={onValueChange} disabled={disabled} trackColor={{ true: theme.primary }} />
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
   // Hero
   hero: {
@@ -827,9 +763,12 @@ const styles = StyleSheet.create({
   ctaSub: { color: 'rgba(255,255,255,0.9)', fontSize: 12, marginTop: 1 },
   ctaArrow: { color: '#fff', fontSize: 24, fontWeight: '700' },
 
+  // Body composition CTA
+  metricsCta: { flexDirection: 'row', alignItems: 'center', gap: Spacing.three },
+  metricsIcon: { width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
+
   // Editors
   nameRow: { flexDirection: 'row', gap: Spacing.two },
-  toggleRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: Spacing.one },
   collapseHeader: { flexDirection: 'row', alignItems: 'center', gap: Spacing.three },
   collapseIcon: { width: 36, height: 36, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   statusRow: {

@@ -1,22 +1,35 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { useRef, useState } from 'react';
-import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import {
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  TextInput,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { DobPicker } from '@/components/dob-picker';
+import { GenderSelect, type Gender } from '@/components/gender-select';
 import { ThemedText } from '@/components/themed-text';
-import { Button, Card, Field, SegmentedControl } from '@/components/ui';
+import { Button, Card, Field } from '@/components/ui';
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { useAuth } from '@/lib/auth';
 import { bmiCategory, computeBmi } from '@/lib/bmi';
+import { ageFromDob } from '@/lib/date';
 import { showAlert } from '@/lib/dialog';
-import { ageFromDob, formatDobInput } from '@/lib/date';
+import { sanitizeDecimal } from '@/lib/num';
 import { requireUserId, supabase } from '@/lib/supabase';
 import type { Unit } from '@/lib/types';
-import { toKg } from '@/lib/units';
+import { fromKg, round1, toKg } from '@/lib/units';
 
-type Gender = 'male' | 'female' | 'other';
+type HeightUnit = 'cm' | 'in';
+const CM_PER_IN = 2.54;
 
 const DEFAULT_GOALS = { calories: '2000', protein_g: '150', carbs_g: '200', fat_g: '65' };
 const TOTAL_STEPS = 3;
@@ -44,7 +57,8 @@ export default function OnboardingScreen() {
   const [dob, setDob] = useState('');
   const [sex, setSex] = useState<Gender | null>(null);
   const [unit, setUnit] = useState<Unit>('kg');
-  const [heightCm, setHeightCm] = useState('');
+  const [heightUnit, setHeightUnit] = useState<HeightUnit>('cm');
+  const [heightInput, setHeightInput] = useState('');
   const [weightInput, setWeightInput] = useState('');
   const [goals, setGoals] = useState(DEFAULT_GOALS);
   const [saving, setSaving] = useState(false);
@@ -57,13 +71,31 @@ export default function OnboardingScreen() {
   };
 
   const weightKg = weightInput !== '' ? toKg(Number(weightInput), unit) : null;
-  const heightNum = heightCm !== '' ? Number(heightCm) : null;
-  const bmi = heightNum && weightKg ? computeBmi(heightNum, weightKg) : null;
+  const heightCm =
+    heightInput !== '' ? (heightUnit === 'cm' ? Number(heightInput) : Number(heightInput) * CM_PER_IN) : null;
+  const bmi = heightCm && weightKg ? computeBmi(heightCm, weightKg) : null;
+
+  // Keep the displayed value the same magnitude when the unit toggles.
+  const onHeightUnitChange = (next: HeightUnit) => {
+    const cur = Number(heightInput);
+    if (heightInput !== '' && Number.isFinite(cur)) {
+      const cm = heightUnit === 'cm' ? cur : cur * CM_PER_IN;
+      setHeightInput(String(round1(next === 'cm' ? cm : cm / CM_PER_IN)));
+    }
+    setHeightUnit(next);
+  };
+  const onWeightUnitChange = (next: Unit) => {
+    const cur = Number(weightInput);
+    if (weightInput !== '' && Number.isFinite(cur)) {
+      setWeightInput(String(round1(fromKg(toKg(cur, unit), next))));
+    }
+    setUnit(next);
+  };
 
   const next = () => {
     if (step === 1) {
-      if (!heightNum || heightNum <= 0) {
-        showAlert('Add your height', 'Enter your height in centimetres to continue.');
+      if (!heightCm || heightCm <= 0) {
+        showAlert('Add your height', 'Enter your height to continue.');
         return;
       }
       if (!weightKg || weightKg <= 0) {
@@ -101,7 +133,7 @@ export default function OnboardingScreen() {
         dob: dob || null,
         age: ageFromDob(dob),
         sex,
-        height_cm: heightNum,
+        height_cm: heightCm,
         weight_kg: weightKg,
         unit_pref: unit,
         updated_at: new Date().toISOString(),
@@ -121,6 +153,12 @@ export default function OnboardingScreen() {
   };
 
   const meta = STEP_META[step];
+  // A filled field gets a primary-tinted border so it's obvious at a glance that
+  // it already has a value (the greyed placeholder was easy to mistake for input).
+  const filledBorder = (v: string) => ({
+    borderColor: v ? theme.primary : theme.border,
+    borderWidth: v ? 1.5 : StyleSheet.hairlineWidth,
+  });
 
   return (
     <KeyboardAvoidingView
@@ -130,7 +168,7 @@ export default function OnboardingScreen() {
         ref={scrollRef}
         contentContainerStyle={styles.scroll}
         keyboardShouldPersistTaps="handled"
-        keyboardDismissMode="on-drag"
+        keyboardDismissMode={Platform.OS === 'web' ? 'none' : 'on-drag'}
         showsVerticalScrollIndicator={false}>
         {/* Gradient hero */}
         <LinearGradient
@@ -205,6 +243,7 @@ export default function OnboardingScreen() {
                     onFocus={handleFieldFocus}
                     autoCapitalize="words"
                     placeholder="Alex"
+                    style={filledBorder(firstName)}
                   />
                 </View>
                 <View style={{ flex: 1 }}>
@@ -215,65 +254,50 @@ export default function OnboardingScreen() {
                     onFocus={handleFieldFocus}
                     autoCapitalize="words"
                     placeholder="Carter"
+                    style={filledBorder(lastName)}
                   />
                 </View>
               </View>
-              <Field
-                label="Date of birth"
-                keyboardType="number-pad"
-                inputMode="numeric"
-                value={dob}
-                onChangeText={(t) => setDob(formatDobInput(t))}
-                onFocus={handleFieldFocus}
-                placeholder="YYYY-MM-DD"
-                maxLength={10}
-              />
+
+              <DobPicker value={dob} onChange={setDob} />
               {ageFromDob(dob) != null ? (
                 <ThemedText type="small" themeColor="textSecondary">
                   Age: {ageFromDob(dob)}
                 </ThemedText>
               ) : null}
-              <View style={{ gap: Spacing.one }}>
-                <ThemedText type="small" themeColor="textSecondary">
-                  Gender
-                </ThemedText>
-                <SegmentedControl<Gender>
-                  value={(sex ?? '') as Gender}
-                  onChange={setSex}
-                  options={[
-                    { label: 'Male', value: 'male' },
-                    { label: 'Female', value: 'female' },
-                    { label: 'Other', value: 'other' },
-                  ]}
-                />
-              </View>
-              <ThemedText type="smallBold" themeColor="textSecondary">
-                PREFERRED WEIGHT UNIT
-              </ThemedText>
-              <SegmentedControl<Unit>
-                value={unit}
-                onChange={setUnit}
-                options={[
+
+              <GenderSelect value={sex} onChange={setSex} />
+
+              <MeasureField
+                label="Height"
+                value={heightInput}
+                onChangeText={(t) => setHeightInput(sanitizeDecimal(t))}
+                onFocus={handleFieldFocus}
+                placeholder={heightUnit === 'cm' ? '175' : '69'}
+                unit={heightUnit}
+                unitOptions={[
+                  { label: 'cm', value: 'cm' },
+                  { label: 'in', value: 'in' },
+                ]}
+                onUnitChange={onHeightUnitChange}
+                filledStyle={filledBorder(heightInput)}
+              />
+
+              <MeasureField
+                label="Weight"
+                value={weightInput}
+                onChangeText={(t) => setWeightInput(sanitizeDecimal(t))}
+                onFocus={handleFieldFocus}
+                placeholder={unit === 'kg' ? '70' : '154'}
+                unit={unit}
+                unitOptions={[
                   { label: 'kg', value: 'kg' },
                   { label: 'lbs', value: 'lbs' },
                 ]}
+                onUnitChange={onWeightUnitChange}
+                filledStyle={filledBorder(weightInput)}
               />
-              <Field
-                label="Height (cm)"
-                keyboardType="numeric"
-                value={heightCm}
-                onChangeText={setHeightCm}
-                onFocus={handleFieldFocus}
-                placeholder="175"
-              />
-              <Field
-                label={`Weight (${unit})`}
-                keyboardType="numeric"
-                value={weightInput}
-                onChangeText={setWeightInput}
-                onFocus={handleFieldFocus}
-                placeholder={unit === 'kg' ? '70' : '154'}
-              />
+
               {bmi ? (
                 <View style={[styles.bmiPill, { backgroundColor: theme.backgroundElement }]}>
                   <ThemedText type="smallBold">BMI {bmi.toFixed(1)}</ThemedText>
@@ -344,6 +368,111 @@ export default function OnboardingScreen() {
   );
 }
 
+/** Label + numeric input with a trailing unit dropdown (e.g. cm / in, kg / lbs). */
+function MeasureField<T extends string>({
+  label,
+  value,
+  onChangeText,
+  onFocus,
+  placeholder,
+  unit,
+  unitOptions,
+  onUnitChange,
+  filledStyle,
+}: {
+  label: string;
+  value: string;
+  onChangeText: (t: string) => void;
+  onFocus: () => void;
+  placeholder: string;
+  unit: T;
+  unitOptions: { label: string; value: T }[];
+  onUnitChange: (v: T) => void;
+  filledStyle: { borderColor: string; borderWidth: number };
+}) {
+  const theme = useTheme();
+  return (
+    <View style={{ gap: Spacing.one }}>
+      <ThemedText type="small" themeColor="textSecondary">
+        {label}
+      </ThemedText>
+      <View style={styles.measureRow}>
+        <TextInput
+          value={value}
+          onChangeText={onChangeText}
+          onFocus={onFocus}
+          placeholder={placeholder}
+          placeholderTextColor={theme.textSecondary}
+          keyboardType="decimal-pad"
+          inputMode="decimal"
+          style={[
+            styles.measureInput,
+            { color: theme.text, backgroundColor: theme.background },
+            filledStyle,
+          ]}
+        />
+        <UnitDropdown value={unit} options={unitOptions} onChange={onUnitChange} />
+      </View>
+    </View>
+  );
+}
+
+/** Compact dropdown for picking a unit; opens a small centered menu. */
+function UnitDropdown<T extends string>({
+  value,
+  options,
+  onChange,
+}: {
+  value: T;
+  options: { label: string; value: T }[];
+  onChange: (v: T) => void;
+}) {
+  const theme = useTheme();
+  const [open, setOpen] = useState(false);
+  const current = options.find((o) => o.value === value);
+  return (
+    <>
+      <Pressable
+        onPress={() => setOpen(true)}
+        style={[styles.unitButton, { backgroundColor: theme.background, borderColor: theme.border }]}>
+        <ThemedText type="smallBold">{current?.label ?? value}</ThemedText>
+        <ThemedText type="small" themeColor="textSecondary">
+          ▾
+        </ThemedText>
+      </Pressable>
+      <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
+        <Pressable style={styles.unitOverlay} onPress={() => setOpen(false)}>
+          <Pressable
+            style={[styles.unitMenu, { backgroundColor: theme.background, borderColor: theme.border }]}
+            onPress={() => {}}>
+            {options.map((o) => {
+              const sel = o.value === value;
+              return (
+                <Pressable
+                  key={o.value}
+                  onPress={() => {
+                    onChange(o.value);
+                    setOpen(false);
+                  }}
+                  style={[styles.unitItem, sel && { backgroundColor: theme.backgroundSelected }]}>
+                  <ThemedText themeColor={sel ? 'primary' : 'text'} style={{ fontWeight: sel ? '700' : '400' }}>
+                    {o.label}
+                  </ThemedText>
+                  {sel ? (
+                    <ThemedText type="smallBold" themeColor="primary">
+                      ✓
+                    </ThemedText>
+                  ) : null}
+                </Pressable>
+              );
+            })}
+          </Pressable>
+        </Pressable>
+      </Modal>
+    </>
+  );
+}
+
 const styles = StyleSheet.create({
   scroll: { paddingBottom: Spacing.six },
   hero: {
@@ -383,6 +512,48 @@ const styles = StyleSheet.create({
   nameRow: { flexDirection: 'row', gap: Spacing.two },
   point: { flexDirection: 'row', alignItems: 'center', gap: Spacing.three },
   pointIcon: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  measureRow: { flexDirection: 'row', alignItems: 'stretch', gap: Spacing.two },
+  measureInput: {
+    flex: 1,
+    borderRadius: Spacing.two,
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.two,
+    fontSize: 16,
+    minHeight: 48,
+  },
+  unitButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.one,
+    minWidth: 76,
+    paddingHorizontal: Spacing.three,
+    borderRadius: Spacing.two,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  unitOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: Spacing.four,
+  },
+  unitMenu: {
+    width: '100%',
+    maxWidth: 220,
+    borderRadius: Spacing.three,
+    borderWidth: StyleSheet.hairlineWidth,
+    padding: Spacing.one,
+    gap: 2,
+  },
+  unitItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: Spacing.two + 2,
+    paddingHorizontal: Spacing.three,
+    borderRadius: Spacing.two,
+  },
   bmiPill: {
     flexDirection: 'row',
     alignItems: 'center',
