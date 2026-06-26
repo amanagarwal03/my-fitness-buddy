@@ -28,7 +28,9 @@ import { fromKg, round1 } from '@/lib/units';
 // A set with its exercise's name/body part joined in.
 type JoinedSet = WorkoutSet & { exercises: { name: string; body_part: BodyPart } | null };
 // Sets grouped under one exercise (within a session, or a manual day log).
-type ExerciseGroup = { exerciseId: string; name: string; bodyPart: BodyPart; sets: WorkoutSet[] };
+// bodyPart is null when the exercise row couldn't be resolved (e.g. RLS hides
+// it) — we show no tag rather than inventing a misleading one.
+type ExerciseGroup = { exerciseId: string; name: string; bodyPart: BodyPart | null; sets: WorkoutSet[] };
 
 function dayLabel(d: Date): string {
   const today = isoDate();
@@ -45,8 +47,8 @@ function groupByExercise(rows: JoinedSet[]): ExerciseGroup[] {
   for (const r of rows) {
     const g = map.get(r.exercise_id) ?? {
       exerciseId: r.exercise_id,
-      name: r.exercises?.name ?? 'Exercise',
-      bodyPart: r.exercises?.body_part ?? 'chest',
+      name: r.exercises?.name ?? 'Unknown exercise',
+      bodyPart: r.exercises?.body_part ?? null,
       sets: [],
     };
     g.sets.push(r);
@@ -470,7 +472,7 @@ function SessionCard({
 
 function ExerciseDetail({ group, unit }: { group: ExerciseGroup; unit: Unit }) {
   const isCardio = group.bodyPart === 'cardio';
-  const meta = BODY_PART_META[group.bodyPart];
+  const meta = group.bodyPart ? BODY_PART_META[group.bodyPart] : undefined;
   return (
     <View>
       <View style={styles.exerciseTitleRow}>

@@ -14,15 +14,18 @@ import type { BodyPart, Unit, WorkoutSession, WorkoutSet } from '@/lib/types';
 import { fromKg, round1 } from '@/lib/units';
 
 type JoinedSet = WorkoutSet & { exercises: { name: string; body_part: BodyPart } | null };
-type ExerciseGroup = { exerciseId: string; name: string; bodyPart: BodyPart; sets: WorkoutSet[] };
+// bodyPart is null when the exercise row couldn't be resolved (e.g. RLS hides
+// it). We deliberately don't invent a body part — a wrong "Chest" tag is worse
+// than no tag, since it implies a workout that never happened.
+type ExerciseGroup = { exerciseId: string; name: string; bodyPart: BodyPart | null; sets: WorkoutSet[] };
 
 function groupByExercise(rows: JoinedSet[]): ExerciseGroup[] {
   const map = new Map<string, ExerciseGroup>();
   for (const r of rows) {
     const g = map.get(r.exercise_id) ?? {
       exerciseId: r.exercise_id,
-      name: r.exercises?.name ?? 'Exercise',
-      bodyPart: r.exercises?.body_part ?? 'chest',
+      name: r.exercises?.name ?? 'Unknown exercise',
+      bodyPart: r.exercises?.body_part ?? null,
       sets: [],
     };
     g.sets.push(r);
@@ -141,7 +144,7 @@ function ExerciseCard({
 }) {
   const theme = useTheme();
   const isCardio = group.bodyPart === 'cardio';
-  const meta = BODY_PART_META[group.bodyPart];
+  const meta = group.bodyPart ? BODY_PART_META[group.bodyPart] : undefined;
   return (
     <Card>
       <View style={styles.exTitleRow}>
