@@ -1,7 +1,7 @@
 import { Tabs } from 'expo-router';
 import { Text, type ColorValue } from 'react-native';
 
-import { SideNavProvider } from '@/components/side-nav';
+import { useResponsive } from '@/hooks/use-responsive';
 import { useTheme } from '@/hooks/use-theme';
 
 function TabIcon({ emoji, color }: { emoji: string; color: ColorValue }) {
@@ -10,8 +10,9 @@ function TabIcon({ emoji, color }: { emoji: string; color: ColorValue }) {
 
 export default function TabsLayout() {
   const theme = useTheme();
+  // On desktop the left sidebar handles navigation, so hide the bottom tab bar.
+  const { isDesktop } = useResponsive();
   return (
-    <SideNavProvider>
     <Tabs
       screenOptions={{
         headerShown: false,
@@ -20,6 +21,7 @@ export default function TabsLayout() {
         tabBarStyle: {
           backgroundColor: theme.background,
           borderTopColor: theme.border,
+          display: isDesktop ? 'none' : 'flex',
         },
       }}>
       <Tabs.Screen
@@ -37,6 +39,13 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
+        name="body"
+        options={{
+          title: 'Body',
+          tabBarIcon: ({ color }) => <TabIcon emoji="📊" color={color} />,
+        }}
+      />
+      <Tabs.Screen
         name="profile"
         options={{
           title: 'Profile',
@@ -44,6 +53,5 @@ export default function TabsLayout() {
         }}
       />
     </Tabs>
-    </SideNavProvider>
   );
 }

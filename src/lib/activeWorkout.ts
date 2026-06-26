@@ -28,6 +28,7 @@ export type StoredExercise = {
   name: string;
   bodyPart: string;
   kind?: LogKind; // how this exercise is logged (absent on older saves)
+  collapsed?: boolean; // editor folded away (absent on older saves)
   sets: StoredSet[];
 };
 export type ActiveWorkout = {
@@ -36,6 +37,9 @@ export type ActiveWorkout = {
   runningSince: number | null; // ms epoch when currently running; null when paused
   unit: Unit;
   speedUnit?: SpeedUnit; // for cardio speed entry (absent on older saves)
+  // When set, finishing appends to this existing session (Continue session)
+  // instead of inserting a new one.
+  continueSessionId?: string | null;
   exercises: StoredExercise[];
   updatedAt: number;
 };

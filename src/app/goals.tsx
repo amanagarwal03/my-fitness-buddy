@@ -2,6 +2,7 @@ import { useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { ScrollView, StyleSheet } from 'react-native';
 
+import { MenuHeader } from '@/components/side-nav';
 import { ThemedText } from '@/components/themed-text';
 import { Button, Card, Field, Screen } from '@/components/ui';
 import { Spacing } from '@/constants/theme';
@@ -73,8 +74,9 @@ export default function GoalsScreen() {
   };
 
   return (
-    <Screen edges={['bottom']}>
+    <Screen>
       <ScrollView contentContainerStyle={styles.content}>
+        <MenuHeader title="Daily goals" />
         <ThemedText themeColor="textSecondary">
           Set your daily targets. The Today dashboard fills up as you log meals.
         </ThemedText>

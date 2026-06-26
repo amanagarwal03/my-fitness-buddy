@@ -23,7 +23,9 @@ export default function BodyPartScreen() {
   const { bodyPart } = useLocalSearchParams<{ bodyPart: BodyPart }>();
   const [exercises, setExercises] = useState<Exercise[]>([]);
   const [loading, setLoading] = useState(true);
-  const [adding, setAdding] = useState(false);
+  const [formOpen, setFormOpen] = useState(false);
+  // When set, the form is renaming this custom exercise; otherwise it adds a new one.
+  const [editTarget, setEditTarget] = useState<Exercise | null>(null);
   const [newName, setNewName] = useState('');
 
   const load = useCallback(async () => {
@@ -49,16 +51,32 @@ export default function BodyPartScreen() {
     }, [load]),
   );
 
+  const openAdd = () => {
+    setEditTarget(null);
+    setNewName('');
+    setFormOpen(true);
+  };
+  const openEdit = (ex: Exercise) => {
+    setEditTarget(ex);
+    setNewName(ex.name);
+    setFormOpen(true);
+  };
+  const closeForm = () => {
+    setFormOpen(false);
+    setEditTarget(null);
+    setNewName('');
+  };
+
   const saveCustom = async () => {
     const name = newName.trim();
     if (!name) return;
     if (PREVIEW_MODE) {
-      setExercises((prev) => [
-        ...prev,
-        { id: `custom-${Date.now()}`, body_part: bodyPart, name, user_id: 'preview', is_custom: true },
-      ]);
-      setNewName('');
-      setAdding(false);
+      setExercises((prev) =>
+        editTarget
+          ? prev.map((e) => (e.id === editTarget.id ? { ...e, name } : e))
+          : [...prev, { id: `custom-${Date.now()}`, body_part: bodyPart, name, user_id: 'preview', is_custom: true }],
+      );
+      closeForm();
       return;
     }
     if (!session) return;
@@ -66,22 +84,56 @@ export default function BodyPartScreen() {
     try {
       userId = await requireUserId();
     } catch (e) {
-      showAlert('Could not add', (e as Error).message);
+      showAlert('Could not save', (e as Error).message);
       return;
     }
-    const { error } = await supabase.from('exercises').insert({
-      body_part: bodyPart,
-      name,
-      user_id: userId,
-      is_custom: true,
-    });
+    const { error } = editTarget
+      ? await supabase
+          .from('exercises')
+          .update({ name })
+          .eq('id', editTarget.id)
+          .eq('user_id', userId)
+      : await supabase.from('exercises').insert({ body_part: bodyPart, name, user_id: userId, is_custom: true });
     if (error) {
-      showAlert('Could not add', error.message);
+      showAlert('Could not save', error.message);
       return;
     }
-    setNewName('');
-    setAdding(false);
+    closeForm();
     load();
+  };
+
+  const deleteCustom = (ex: Exercise) => {
+    const remove = async () => {
+      if (PREVIEW_MODE) {
+        setExercises((prev) => prev.filter((e) => e.id !== ex.id));
+        return;
+      }
+      let userId: string;
+      try {
+        userId = await requireUserId();
+      } catch (e) {
+        showAlert('Could not delete', (e as Error).message);
+        return;
+      }
+      const { error } = await supabase
+        .from('exercises')
+        .delete()
+        .eq('id', ex.id)
+        .eq('user_id', userId);
+      if (error) {
+        showAlert('Could not delete', error.message);
+        return;
+      }
+      load();
+    };
+    showAlert(
+      'Delete exercise?',
+      `“${ex.name}” will be removed from your list, along with any sets you’ve logged under it. To just fix a typo, use Edit instead.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Delete', style: 'destructive', onPress: remove },
+      ],
+    );
   };
 
   return (
@@ -107,36 +159,54 @@ export default function BodyPartScreen() {
         ) : null}
 
         {exercises.map((ex) => (
-          <Pressable
-            key={ex.id}
-            onPress={() =>
-              router.push({
-                pathname: '/workout/exercise/[id]',
-                params: { id: ex.id, name: ex.name, bodyPart: ex.body_part },
-              })
-            }>
-            <Card style={styles.row}>
+          <Card key={ex.id} style={styles.row}>
+            <Pressable
+              style={styles.rowMain}
+              onPress={() =>
+                router.push({
+                  pathname: '/workout/exercise/[id]',
+                  params: { id: ex.id, name: ex.name, bodyPart: ex.body_part },
+                })
+              }>
               <ThemedText style={{ flex: 1 }}>{ex.name}</ThemedText>
               {ex.is_custom ? (
-                <ThemedText type="small" themeColor="textSecondary">
-                  custom
-                </ThemedText>
+                <View style={[styles.customTag, { backgroundColor: theme.backgroundSelected }]}>
+                  <ThemedText type="small" themeColor="textSecondary">
+                    custom
+                  </ThemedText>
+                </View>
               ) : null}
               <ThemedText type="small" style={{ color: theme.primary }}>
                 Log ›
               </ThemedText>
-            </Card>
-          </Pressable>
+            </Pressable>
+            {ex.is_custom ? (
+              <View style={styles.rowActions}>
+                <Pressable onPress={() => openEdit(ex)} hitSlop={8} style={styles.iconBtn}>
+                  <ThemedText type="small" themeColor="primary">
+                    ✎ Edit
+                  </ThemedText>
+                </Pressable>
+                <Pressable onPress={() => deleteCustom(ex)} hitSlop={8} style={styles.iconBtn}>
+                  <ThemedText type="small" themeColor="danger">
+                    🗑 Delete
+                  </ThemedText>
+                </Pressable>
+              </View>
+            ) : null}
+          </Card>
         ))}
 
         <View style={{ height: Spacing.two }} />
-        <Button title="＋ Add custom exercise" variant="secondary" onPress={() => setAdding(true)} />
+        <Button title="＋ Add custom exercise" variant="secondary" onPress={openAdd} />
       </ScrollView>
 
-      <Modal visible={adding} transparent animationType="fade" onRequestClose={() => setAdding(false)}>
+      <Modal visible={formOpen} transparent animationType="fade" onRequestClose={closeForm}>
         <View style={styles.overlay}>
           <Card style={{ gap: Spacing.three }}>
-            <ThemedText type="smallBold">New {bodyPart} exercise</ThemedText>
+            <ThemedText type="smallBold">
+              {editTarget ? 'Rename exercise' : `New ${bodyPart} exercise`}
+            </ThemedText>
             <Field
               label="Exercise name"
               value={newName}
@@ -144,15 +214,8 @@ export default function BodyPartScreen() {
               placeholder="e.g. Incline dumbbell press"
               autoFocus
             />
-            <Button title="Add" onPress={saveCustom} />
-            <Button
-              title="Cancel"
-              variant="secondary"
-              onPress={() => {
-                setNewName('');
-                setAdding(false);
-              }}
-            />
+            <Button title={editTarget ? 'Save' : 'Add'} onPress={saveCustom} />
+            <Button title="Cancel" variant="secondary" onPress={closeForm} />
           </Card>
         </View>
       </Modal>
@@ -162,7 +225,16 @@ export default function BodyPartScreen() {
 
 const styles = StyleSheet.create({
   content: { padding: Spacing.three, gap: Spacing.two },
-  row: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
+  row: { gap: Spacing.two },
+  rowMain: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
+  customTag: { paddingHorizontal: Spacing.two, paddingVertical: 1, borderRadius: 999 },
+  rowActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: Spacing.three,
+    paddingTop: Spacing.one,
+  },
+  iconBtn: { paddingVertical: 2, paddingHorizontal: Spacing.one },
   overlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.4)',

@@ -79,7 +79,7 @@ export default function ResetPasswordScreen() {
           ref={scrollRef}
           contentContainerStyle={styles.scroll}
           keyboardShouldPersistTaps="handled"
-          keyboardDismissMode="on-drag">
+          keyboardDismissMode={Platform.OS === 'web' ? 'none' : 'on-drag'}>
           <View style={styles.iconWrap}>
             <ThemedText style={{ fontSize: 40 }}>🔐</ThemedText>
           </View>

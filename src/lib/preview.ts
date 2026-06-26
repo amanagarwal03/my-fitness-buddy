@@ -87,6 +87,15 @@ export const previewProfile: Profile = {
   share_name: true,
   share_age: false,
   share_gender: false,
+  share_body: true,
+  neck_cm: 38,
+  chest_cm: 100,
+  biceps_cm: 35,
+  waist_cm: 82,
+  hips_cm: 95,
+  thighs_cm: 56,
+  activity_level: 'moderate',
+  goal: 'maintain',
   updated_at: now.toISOString(),
 };
 

@@ -3,6 +3,7 @@ import { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
   Modal,
+  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -196,7 +197,11 @@ export default function NutritionScreen() {
     <Screen>
       <ScrollView
         contentContainerStyle={styles.content}
-        refreshControl={<RefreshControl refreshing={loading} onRefresh={load} />}>
+        refreshControl={
+          Platform.OS === 'web' ? undefined : (
+            <RefreshControl refreshing={loading} onRefresh={load} />
+          )
+        }>
         <View style={styles.headerRow}>
           <View style={styles.headerLeft}>
             <MenuButton />
@@ -204,11 +209,20 @@ export default function NutritionScreen() {
               {dayLabel(selectedDate)}
             </ThemedText>
           </View>
-          <Pressable onPress={() => router.push('/goals')} hitSlop={8}>
-            <ThemedText type="smallBold" themeColor="primary">
-              Edit goals
-            </ThemedText>
-          </Pressable>
+          <View style={styles.headerActions}>
+            {Platform.OS === 'web' ? (
+              <Pressable onPress={load} hitSlop={8}>
+                <ThemedText type="smallBold" themeColor="primary">
+                  {loading ? '↻ …' : '↻ Refresh'}
+                </ThemedText>
+              </Pressable>
+            ) : null}
+            <Pressable onPress={() => router.push('/goals')} hitSlop={8}>
+              <ThemedText type="smallBold" themeColor="primary">
+                Edit goals
+              </ThemedText>
+            </Pressable>
+          </View>
         </View>
 
         <CollapsibleCalendar
@@ -344,6 +358,15 @@ export default function NutritionScreen() {
               {MEAL_TYPES.find((m) => m.key === logFor)?.label ?? 'Add a meal'} · how do you want to add it?
             </ThemedText>
             <SheetOption
+              emoji="🔍"
+              label="Search food"
+              onPress={() => {
+                const t = logFor;
+                setLogFor(null);
+                if (t) router.push({ pathname: '/food-search', params: { mealType: t } });
+              }}
+            />
+            <SheetOption
               emoji="📷"
               label="Take photo"
               onPress={() => {
@@ -472,6 +495,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   headerLeft: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: Spacing.three },
   calRow: {
     flexDirection: 'row',
     alignItems: 'flex-end',

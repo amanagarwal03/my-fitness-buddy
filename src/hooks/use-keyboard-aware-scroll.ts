@@ -33,10 +33,12 @@ type KeyboardScrollResponder = {
 export function useKeyboardAwareScroll(extraOffset = 28) {
   const scrollRef = useRef<ScrollView>(null);
   const [keyboardSpacerHeight, setKeyboardSpacerHeight] = useState(0);
-  // On web there is no RN soft keyboard, and mobile browsers already scroll the
-  // focused input into view. Our manual scrolling fights the browser (causing
-  // jank / the page auto-scrolling away from the field), so disable it on web.
   const isWeb = Platform.OS === 'web';
+
+  // On native we add a "drag down to dismiss" gesture; on web that same gesture
+  // (react-native-web blurs the input the moment you start scrolling) closes the
+  // mobile browser keyboard on every scroll, so leave the keyboard alone there.
+  const keyboardDismissMode: 'none' | 'on-drag' = isWeb ? 'none' : 'on-drag';
 
   useEffect(() => {
     if (isWeb) return;
@@ -52,7 +54,18 @@ export function useKeyboardAwareScroll(extraOffset = 28) {
 
   const handleInputFocus = useCallback(
     (e: NativeSyntheticEvent<TargetedEvent>) => {
-      if (isWeb) return;
+      if (isWeb) {
+        // The mobile browser keyboard overlays the page without resizing the RN
+        // ScrollView, so a field near the bottom ends up hidden behind it. Center
+        // the focused input in the viewport once the keyboard has animated in.
+        const node = (e as unknown as { target?: { scrollIntoView?: (opts: object) => void } })
+          .target;
+        const scrollIntoView = node?.scrollIntoView;
+        if (scrollIntoView) {
+          setTimeout(() => scrollIntoView.call(node, { block: 'center', behavior: 'smooth' }), 300);
+        }
+        return;
+      }
       const node = e.nativeEvent.target;
       if (node == null) return;
       // Delay so the keyboard frame is registered first (Android only emits
@@ -67,5 +80,5 @@ export function useKeyboardAwareScroll(extraOffset = 28) {
     [extraOffset, isWeb],
   );
 
-  return { scrollRef, handleInputFocus, keyboardSpacerHeight };
+  return { scrollRef, handleInputFocus, keyboardSpacerHeight, keyboardDismissMode };
 }

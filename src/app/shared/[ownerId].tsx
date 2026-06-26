@@ -1,7 +1,16 @@
 import { Image } from 'expo-image';
-import { Stack, useLocalSearchParams } from 'expo-router';
+import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Modal,
+  Platform,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  View,
+} from 'react-native';
 
 import { CollapsibleCalendar } from '@/components/calendar';
 import { ThemedText } from '@/components/themed-text';
@@ -48,9 +57,11 @@ function groupByExercise(rows: JoinedSet[]): ExerciseGroup[] {
 
 export default function SharedProfileScreen() {
   const theme = useTheme();
+  const router = useRouter();
   const { ownerId } = useLocalSearchParams<{ ownerId: string }>();
   const [label, setLabel] = useState<string>('Shared profile');
   const [profile, setProfile] = useState<Profile | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
 
   // Calendar selection + marked days (any day with a meal or workout logged).
   const [selectedDate, setSelectedDate] = useState(() => new Date());
@@ -147,6 +158,13 @@ export default function SharedProfileScreen() {
     loadDay();
   }, [loadDay]);
 
+  // Pull-to-refresh on native; a button drives this on web.
+  const refresh = useCallback(async () => {
+    setRefreshing(true);
+    await Promise.all([loadHeader(), loadDay()]);
+    setRefreshing(false);
+  }, [loadHeader, loadDay]);
+
   const unit: Unit = profile?.unit_pref ?? 'kg';
   const totals = meals.reduce(
     (a, m) => ({
@@ -177,7 +195,23 @@ export default function SharedProfileScreen() {
   return (
     <Screen edges={['bottom']}>
       <Stack.Screen options={{ title: 'Shared profile' }} />
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView
+        contentContainerStyle={styles.content}
+        refreshControl={
+          Platform.OS === 'web' ? undefined : (
+            <RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={theme.primary} />
+          )
+        }>
+        {Platform.OS === 'web' ? (
+          <Pressable
+            onPress={refresh}
+            hitSlop={8}
+            style={[styles.refreshBtn, { borderColor: theme.border }]}>
+            <ThemedText type="smallBold" themeColor="primary">
+              {refreshing ? '↻ Refreshing…' : '↻ Refresh'}
+            </ThemedText>
+          </Pressable>
+        ) : null}
         {/* Identity header */}
         <Card style={styles.headerCard}>
           <View style={[styles.avatar, { backgroundColor: theme.primary }]}>
@@ -216,6 +250,29 @@ export default function SharedProfileScreen() {
               sub={profile.height_cm != null ? 'cm' : ''}
             />
           </View>
+        ) : null}
+
+        {/* Body composition — its own screen, only if the owner shares it */}
+        {profile?.share_body ? (
+          <Pressable
+            onPress={() =>
+              router.push({ pathname: '/shared/body/[ownerId]', params: { ownerId: ownerId! } })
+            }>
+            <Card style={styles.bodyCta}>
+              <View style={[styles.bodyCtaIcon, { backgroundColor: theme.primary + '22' }]}>
+                <ThemedText style={{ fontSize: 20 }}>📊</ThemedText>
+              </View>
+              <View style={{ flex: 1 }}>
+                <ThemedText type="smallBold">Body composition</ThemedText>
+                <ThemedText type="small" themeColor="textSecondary">
+                  Metrics, body fat & measurements
+                </ThemedText>
+              </View>
+              <ThemedText type="smallBold" themeColor="primary">
+                View ›
+              </ThemedText>
+            </Card>
+          </Pressable>
         ) : null}
 
         {/* Calendar: tap a day to see that day's meals + workouts */}
@@ -311,6 +368,12 @@ export default function SharedProfileScreen() {
                 session={s}
                 groups={sessionGroups[s.id] ?? []}
                 unit={unit}
+                onPress={() =>
+                  router.push({
+                    pathname: '/shared/session/[id]',
+                    params: { id: s.id, ownerId: ownerId! },
+                  })
+                }
               />
             ))}
             {manualGroups.length > 0 ? (
@@ -346,55 +409,62 @@ export default function SharedProfileScreen() {
   );
 }
 
+// Compact, tappable summary of a session — opens the full-screen detail.
 function SessionCard({
   index,
   session,
   groups,
-  unit,
+  onPress,
 }: {
   index: number;
   session: WorkoutSession;
   groups: ExerciseGroup[];
   unit: Unit;
+  onPress: () => void;
 }) {
   const theme = useTheme();
   const clock = (d: Date) => d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
   const start = new Date(session.started_at);
   const end = session.ended_at ? new Date(session.ended_at) : null;
   const totalSets = groups.reduce((a, g) => a + g.sets.length, 0);
+  const preview = groups
+    .map((g) => g.name)
+    .slice(0, 3)
+    .join(', ');
 
   return (
-    <Card>
-      <View style={styles.sessionHeader}>
-        <View style={{ flex: 1 }}>
-          <ThemedText type="smallBold">⏱  Session {index + 1}</ThemedText>
-          <ThemedText type="small" themeColor="textSecondary">
-            {clock(start)}
-            {end ? ` – ${clock(end)}` : ''}
-          </ThemedText>
-        </View>
-        <View style={styles.sessionStats}>
-          <ThemedText type="smallBold" themeColor="primary">
-            {formatDuration(session.duration_seconds ?? 0)}
-          </ThemedText>
-          <ThemedText type="small" themeColor="textSecondary">
-            {totalSets} {totalSets === 1 ? 'set' : 'sets'}
-          </ThemedText>
-        </View>
-      </View>
-
-      {groups.length === 0 ? (
-        <ThemedText type="small" themeColor="textSecondary">
-          No sets recorded.
-        </ThemedText>
-      ) : (
-        groups.map((g) => (
-          <View key={g.exerciseId} style={[styles.exerciseBlock, { borderTopColor: theme.border }]}>
-            <ExerciseDetail group={g} unit={unit} />
+    <Pressable onPress={onPress} style={({ pressed }) => (pressed ? { opacity: 0.7 } : null)}>
+      <Card>
+        <View style={styles.sessionHeader}>
+          <View style={{ flex: 1 }}>
+            <ThemedText type="smallBold">⏱  Session {index + 1}</ThemedText>
+            <ThemedText type="small" themeColor="textSecondary">
+              {clock(start)}
+              {end ? ` – ${clock(end)}` : ''}
+            </ThemedText>
           </View>
-        ))
-      )}
-    </Card>
+          <View style={styles.sessionStats}>
+            <ThemedText type="smallBold" themeColor="primary">
+              {formatDuration(session.duration_seconds ?? 0)}
+            </ThemedText>
+            <ThemedText type="small" themeColor="textSecondary">
+              {totalSets} {totalSets === 1 ? 'set' : 'sets'}
+            </ThemedText>
+          </View>
+        </View>
+
+        <View style={[styles.sessionFooter, { borderTopColor: theme.border }]}>
+          <ThemedText type="small" themeColor="textSecondary" style={{ flex: 1 }} numberOfLines={1}>
+            {groups.length === 0
+              ? 'No sets recorded'
+              : `${groups.length} ${groups.length === 1 ? 'exercise' : 'exercises'}${preview ? ` · ${preview}${groups.length > 3 ? '…' : ''}` : ''}`}
+          </ThemedText>
+          <ThemedText type="smallBold" themeColor="primary">
+            View ›
+          </ThemedText>
+        </View>
+      </Card>
+    </Pressable>
   );
 }
 
@@ -480,6 +550,8 @@ const styles = StyleSheet.create({
   dot: { width: 8, height: 8, borderRadius: 4 },
   statsRow: { flexDirection: 'row', gap: Spacing.three },
   statCard: { flex: 1, alignItems: 'center', gap: Spacing.half },
+  bodyCta: { flexDirection: 'row', alignItems: 'center', gap: Spacing.three },
+  bodyCtaIcon: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   section: { marginTop: Spacing.one },
   calRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   macroChips: { flexDirection: 'row', gap: Spacing.two, flexWrap: 'wrap', justifyContent: 'flex-end' },
@@ -500,7 +572,22 @@ const styles = StyleSheet.create({
     padding: Spacing.three,
   },
   fullPhoto: { width: '100%', height: '80%', borderRadius: Spacing.three },
+  refreshBtn: {
+    alignSelf: 'flex-end',
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.one,
+    borderRadius: 999,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
   sessionHeader: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
+  sessionFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    marginTop: Spacing.two,
+    paddingTop: Spacing.two,
+  },
   sessionStats: { alignItems: 'flex-end' },
   exerciseTitleRow: {
     flexDirection: 'row',

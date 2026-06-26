@@ -2,7 +2,7 @@ import 'react-native-url-polyfill/auto';
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createClient } from '@supabase/supabase-js';
-import { AppState } from 'react-native';
+import { AppState, Platform } from 'react-native';
 
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
 const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
@@ -25,7 +25,10 @@ export const supabase = createClient(
   supabaseAnonKey || 'placeholder-anon-key',
   {
     auth: {
-      storage: AsyncStorage,
+      // On web, let supabase-js use its default browser localStorage (its most
+      // battle-tested persistence path — fixes sessions not surviving reloads on
+      // mobile browsers). Native uses AsyncStorage.
+      storage: Platform.OS === 'web' ? undefined : AsyncStorage,
       autoRefreshToken: true,
       persistSession: true,
       detectSessionInUrl: false,

@@ -5,6 +5,9 @@ import { useColorScheme } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { BrandSplash } from '@/components/brand-splash';
+import { DesktopShell } from '@/components/desktop-shell';
+import { HeaderNav, SideNavProvider } from '@/components/side-nav';
+import { useTheme } from '@/hooks/use-theme';
 import { AuthProvider, useAuth } from '@/lib/auth';
 import { PREVIEW_MODE } from '@/lib/preview';
 
@@ -48,32 +51,55 @@ function RootNavigator() {
 
   return (
     <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <Stack screenOptions={{ headerShown: false }}>
-        <Stack.Screen name="(auth)" />
-        <Stack.Screen name="onboarding" />
-        <Stack.Screen name="(tabs)" />
-        <Stack.Screen
-          name="result"
-          options={{ headerShown: true, title: 'Meal analysis', presentation: 'modal' }}
-        />
-        <Stack.Screen
-          name="goals"
-          options={{ headerShown: true, title: 'Daily goals', presentation: 'modal' }}
-        />
-        <Stack.Screen name="share" options={{ headerShown: true }} />
-        <Stack.Screen name="shared/[ownerId]" options={{ headerShown: true }} />
-        <Stack.Screen name="barcode" options={{ headerShown: true, presentation: 'modal' }} />
-        <Stack.Screen name="workout/log" options={{ headerShown: true, title: 'Log Workout' }} />
-        <Stack.Screen
-          name="workout/add-exercise"
-          options={{ headerShown: true, title: 'Add Exercise', presentation: 'modal' }}
-        />
-        <Stack.Screen name="workout/[bodyPart]" options={{ headerShown: true }} />
-        <Stack.Screen name="workout/exercise/[id]" options={{ headerShown: true }} />
-        <Stack.Screen name="workout/progress/[id]" options={{ headerShown: true }} />
-        <Stack.Screen name="workout/edit-session/[id]" options={{ headerShown: true }} />
-      </Stack>
+      <SideNavProvider>
+        <StackNavigator />
+      </SideNavProvider>
     </ThemeProvider>
+  );
+}
+
+// Every stacked content screen shows the ☰ menu (and a back chevron when
+// applicable) on the left, themed so it stays visible on light/dark headers.
+// The header is off by default — auth, onboarding, the tab bar and the redirect
+// index keep their own chrome — and turned on per content screen below. The
+// shared headerLeft only renders where a header is shown.
+function StackNavigator() {
+  const theme = useTheme();
+  return (
+    <Stack
+      screenOptions={{
+        headerShown: false,
+        headerLeft: () => <HeaderNav />,
+        headerStyle: { backgroundColor: theme.background },
+        headerTintColor: theme.text,
+        headerTitleStyle: { color: theme.text },
+        headerShadowVisible: false,
+      }}>
+      <Stack.Screen name="(auth)" />
+      <Stack.Screen name="onboarding" />
+      <Stack.Screen name="(tabs)" />
+      <Stack.Screen
+        name="result"
+        options={{ headerShown: true, title: 'Meal analysis', presentation: 'modal' }}
+      />
+      {/* Share & Goals use an in-content title row (like the tabs), so no header. */}
+      <Stack.Screen name="share" options={{ headerShown: false }} />
+      <Stack.Screen name="goals" options={{ headerShown: false }} />
+      <Stack.Screen name="shared/[ownerId]" options={{ headerShown: true }} />
+      <Stack.Screen name="shared/session/[id]" options={{ headerShown: true }} />
+      <Stack.Screen name="shared/body/[ownerId]" options={{ headerShown: true }} />
+      <Stack.Screen name="barcode" options={{ headerShown: true, presentation: 'modal' }} />
+      <Stack.Screen name="workout/log" options={{ headerShown: true, title: 'Log Workout' }} />
+      <Stack.Screen
+        name="workout/add-exercise"
+        options={{ headerShown: true, title: 'Add Exercise', presentation: 'modal' }}
+      />
+      <Stack.Screen name="workout/[bodyPart]" options={{ headerShown: true }} />
+      <Stack.Screen name="workout/exercise/[id]" options={{ headerShown: true }} />
+      <Stack.Screen name="workout/progress/[id]" options={{ headerShown: true }} />
+      <Stack.Screen name="workout/edit-session/[id]" options={{ headerShown: true }} />
+      <Stack.Screen name="workout/group-progress/[bodyPart]" options={{ headerShown: true }} />
+    </Stack>
   );
 }
 
@@ -81,7 +107,9 @@ export default function RootLayout() {
   return (
     <SafeAreaProvider>
       <AuthProvider>
-        <RootNavigator />
+        <DesktopShell>
+          <RootNavigator />
+        </DesktopShell>
       </AuthProvider>
     </SafeAreaProvider>
   );

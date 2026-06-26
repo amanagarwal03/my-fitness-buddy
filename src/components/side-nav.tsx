@@ -7,6 +7,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
 import { Spacing } from '@/constants/theme';
+import { useResponsive } from '@/hooks/use-responsive';
 import { useTheme } from '@/hooks/use-theme';
 import { useAuth } from '@/lib/auth';
 import { supabase } from '@/lib/supabase';
@@ -21,10 +22,48 @@ export function useSideNav() {
 /** Hamburger (☰) button — place in a screen header to open the side nav. */
 export function MenuButton() {
   const { open } = useSideNav();
+  const { isDesktop } = useResponsive();
+  // On desktop the persistent sidebar replaces the slide-out nav.
+  if (isDesktop) return null;
   return (
     <Pressable onPress={open} hitSlop={10} style={{ paddingRight: Spacing.two }}>
       <ThemedText style={{ fontSize: 24 }}>☰</ThemedText>
     </Pressable>
+  );
+}
+
+/**
+ * In-content title row (☰ + heading) matching the tab screens, so menu
+ * destinations like Share and Goals line up identically. The ☰ hides on desktop
+ * (the sidebar replaces it), leaving just the heading — same as the tabs.
+ */
+export function MenuHeader({ title }: { title: string }) {
+  return (
+    <View style={styles.menuHeader}>
+      <MenuButton />
+      <ThemedText type="subtitle" style={{ flex: 1 }} numberOfLines={1}>
+        {title}
+      </ThemedText>
+    </View>
+  );
+}
+
+/**
+ * Header-left control for stacked screens: just the ☰ menu, so the side nav is
+ * reachable from anywhere. On desktop the persistent sidebar replaces it, so it
+ * renders nothing there.
+ */
+export function HeaderNav() {
+  const { open } = useSideNav();
+  const theme = useTheme();
+  const { isDesktop } = useResponsive();
+  if (isDesktop) return null;
+  return (
+    <View style={styles.headerNav}>
+      <Pressable onPress={open} hitSlop={10} accessibilityLabel="Open menu">
+        <ThemedText style={{ fontSize: 24, color: theme.text }}>☰</ThemedText>
+      </Pressable>
+    </View>
   );
 }
 
@@ -57,6 +96,14 @@ export function SideNavProvider({ children }: { children: ReactNode }) {
     close();
     router.push(path as never);
   };
+
+  // The three main tabs, so the menu doubles as full navigation.
+  const tabItems: Item[] = [
+    { label: 'Nutrition', emoji: '🍽️', onPress: () => go('/(tabs)/nutrition') },
+    { label: 'Workout', emoji: '🏋️', onPress: () => go('/(tabs)/workout') },
+    { label: 'Body', emoji: '📊', onPress: () => go('/(tabs)/body') },
+    { label: 'Profile', emoji: '👤', onPress: () => go('/(tabs)/profile') },
+  ];
 
   const items: Item[] = [
     { label: 'Share & coaches', emoji: '🤝', onPress: () => go('/share') },
@@ -97,6 +144,21 @@ export function SideNavProvider({ children }: { children: ReactNode }) {
               </View>
 
               <View style={styles.items}>
+                {tabItems.map((it) => (
+                  <Pressable
+                    key={it.label}
+                    onPress={it.onPress}
+                    style={({ pressed }) => [
+                      styles.item,
+                      { backgroundColor: pressed ? theme.backgroundElement : 'transparent' },
+                    ]}>
+                    <ThemedText style={{ fontSize: 20 }}>{it.emoji}</ThemedText>
+                    <ThemedText type="smallBold">{it.label}</ThemedText>
+                  </Pressable>
+                ))}
+
+                <View style={[styles.menuDivider, { backgroundColor: theme.border }]} />
+
                 {items.map((it) => (
                   <Pressable
                     key={it.label}
@@ -134,6 +196,9 @@ export function SideNavProvider({ children }: { children: ReactNode }) {
 }
 
 const styles = StyleSheet.create({
+  headerNav: { flexDirection: 'row', alignItems: 'center', paddingLeft: Spacing.two },
+  menuHeader: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
+  headerBack: { paddingRight: Spacing.one },
   backdrop: { flex: 1, flexDirection: 'row', backgroundColor: 'rgba(0,0,0,0.45)' },
   panel: {
     width: '78%',
@@ -143,6 +208,7 @@ const styles = StyleSheet.create({
   },
   header: { padding: Spacing.four, gap: Spacing.one },
   items: { flex: 1, paddingHorizontal: Spacing.two, gap: Spacing.one },
+  menuDivider: { height: StyleSheet.hairlineWidth, marginVertical: Spacing.two, marginHorizontal: Spacing.three },
   item: {
     flexDirection: 'row',
     alignItems: 'center',

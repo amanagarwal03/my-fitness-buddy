@@ -2,10 +2,11 @@ import { LinearGradient } from 'expo-linear-gradient';
 import * as Linking from 'expo-linking';
 import { useRouter } from 'expo-router';
 import { useRef, useState } from 'react';
-import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { BrandLogo } from '@/components/brand-logo';
+import { GoogleGLogo } from '@/components/google-g-logo';
 import { ThemedText } from '@/components/themed-text';
 import { Button, Field, SegmentedControl } from '@/components/ui';
 import { Spacing } from '@/constants/theme';
@@ -58,6 +59,23 @@ export default function SignInScreen() {
     );
   };
 
+  // Google OAuth (web). signInWithOAuth redirects the page to Google; on return
+  // the `?code=` is exchanged for a session by the handler in auth.tsx.
+  // Requires the Google provider enabled in Supabase + this origin added to the
+  // dashboard's Auth → URL Configuration → Redirect URLs.
+  const signInWithGoogle = async () => {
+    setNotice(null);
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: { redirectTo: window.location.origin },
+      });
+      if (error) throw error;
+    } catch (e) {
+      setNotice({ kind: 'error', text: e instanceof Error ? e.message : String(e) });
+    }
+  };
+
   const submit = async () => {
     setNotice(null);
     setShowResend(false);
@@ -78,7 +96,18 @@ export default function SignInScreen() {
           options: { emailRedirectTo: emailRedirect },
         });
         if (error) throw error;
-        if (!data.session) {
+        // Supabase obfuscates sign-ups for an existing confirmed account: no error
+        // and no email is sent, but the returned user has an empty identities
+        // array. Detect that and send them to sign in instead of pretending we
+        // sent a fresh confirmation link.
+        if (!data.session && (data.user?.identities?.length ?? 0) === 0) {
+          setMode('signIn');
+          setNotice({
+            kind: 'info',
+            text: `You already have an account with ${email}. Please sign in.`,
+          });
+          setShowResend(false);
+        } else if (!data.session) {
           setMode('signIn');
           setNotice({
             kind: 'info',
@@ -94,7 +123,11 @@ export default function SignInScreen() {
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      if (/not confirmed/i.test(msg)) {
+      if (/already registered|already exists|already.*account/i.test(msg)) {
+        setMode('signIn');
+        setNotice({ kind: 'info', text: `You already have an account with ${email}. Please sign in.` });
+        setShowResend(false);
+      } else if (/not confirmed/i.test(msg)) {
         setNotice({ kind: 'info', text: 'Please confirm your email first — check your inbox.' });
         setShowResend(true);
       } else {
@@ -113,7 +146,7 @@ export default function SignInScreen() {
           ref={scrollRef}
           contentContainerStyle={styles.scroll}
           keyboardShouldPersistTaps="handled"
-          keyboardDismissMode="on-drag"
+          keyboardDismissMode={Platform.OS === 'web' ? 'none' : 'on-drag'}
           showsVerticalScrollIndicator={false}>
           {/* Branded hero */}
           <LinearGradient
@@ -218,6 +251,26 @@ export default function SignInScreen() {
               loading={loading}
             />
 
+            {Platform.OS === 'web' ? (
+              <>
+                <View style={styles.dividerRow}>
+                  <View style={[styles.dividerLine, { backgroundColor: theme.border }]} />
+                  <ThemedText type="small" themeColor="textSecondary">
+                    or
+                  </ThemedText>
+                  <View style={[styles.dividerLine, { backgroundColor: theme.border }]} />
+                </View>
+                <Pressable
+                  onPress={signInWithGoogle}
+                  style={({ pressed }) => [styles.googleBtn, pressed && { opacity: 0.9 }]}>
+                  <GoogleGLogo size={20} />
+                  <Text style={styles.googleText}>
+                    {mode === 'signIn' ? 'Sign in with Google' : 'Sign up with Google'}
+                  </Text>
+                </Pressable>
+              </>
+            ) : null}
+
             {mode === 'signIn' ? (
               <Pressable
                 onPress={() => router.push('/(auth)/reset-password')}
@@ -282,4 +335,19 @@ const styles = StyleSheet.create({
     elevation: 6,
   },
   footer: { textAlign: 'center', marginTop: Spacing.four, paddingHorizontal: Spacing.four },
+  dividerRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
+  dividerLine: { flex: 1, height: StyleSheet.hairlineWidth },
+  // Official Google "light" button style: white surface, neutral border, dark label.
+  googleBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.two + 2,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#747775',
+    borderRadius: Spacing.two,
+    minHeight: 48,
+  },
+  googleText: { color: '#1F1F1F', fontSize: 15, fontWeight: '600' },
 });

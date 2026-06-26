@@ -1,7 +1,7 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Platform, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 
 import { showAlert } from '@/lib/dialog';
 
@@ -70,6 +70,10 @@ export default function WorkoutScreen() {
   const [speedUnit, setSpeedUnit] = useState<SpeedUnit>('kmph');
   const [weightKg, setWeightKg] = useState<number | null>(null); // body weight, for calorie estimates
   const [activeElapsed, setActiveElapsed] = useState<number | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  // Merge mode: tap "Merge", tick the sessions to combine, confirm.
+  const [mergeMode, setMergeMode] = useState(false);
+  const [mergeSel, setMergeSel] = useState<Set<string>>(new Set());
 
   const checkActive = useCallback(async () => {
     const w = await loadActiveWorkout();
@@ -151,6 +155,20 @@ export default function WorkoutScreen() {
     }, [loadDay, loadMarks, checkActive]),
   );
 
+  // Leave merge mode when the viewed day changes — selections shouldn't carry over.
+  useEffect(() => {
+    setMergeMode(false);
+    setMergeSel(new Set());
+  }, [selectedDate]);
+
+  // Pull-to-refresh on native; a visible button drives this on web (where RN's
+  // pull gesture doesn't fire).
+  const refresh = useCallback(async () => {
+    setRefreshing(true);
+    await Promise.all([loadDay(), loadMarks(), checkActive()]);
+    setRefreshing(false);
+  }, [loadDay, loadMarks, checkActive]);
+
   const discardActive = () => {
     showAlert('Discard in-progress workout?', 'This clears the workout you started.', [
       { text: 'Cancel', style: 'cancel' },
@@ -203,8 +221,87 @@ export default function WorkoutScreen() {
     ]);
   };
 
+  const enterMergeMode = () => {
+    setMergeSel(new Set());
+    setMergeMode(true);
+  };
+  const exitMergeMode = () => {
+    setMergeMode(false);
+    setMergeSel(new Set());
+  };
+  const toggleMergeSel = (id: string) =>
+    setMergeSel((cur) => {
+      const next = new Set(cur);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  // Fold the selected sessions into the earliest of them: re-point all their sets,
+  // sum the durations, extend the end time, and delete the now-empty extras.
+  const mergeSelected = () => {
+    const chosen = daySessions.filter((s) => mergeSel.has(s.id));
+    if (chosen.length < 2) return;
+    const doMerge = async () => {
+      if (!PREVIEW_MODE) {
+        const ordered = [...chosen].sort(
+          (a, b) => new Date(a.started_at).getTime() - new Date(b.started_at).getTime(),
+        );
+        const keep = ordered[0];
+        const others = ordered.slice(1);
+        const totalDur = ordered.reduce((a, s) => a + (s.duration_seconds ?? 0), 0);
+        const lastEnd = ordered
+          .map((s) => s.ended_at)
+          .filter((e): e is string => !!e)
+          .sort()
+          .at(-1);
+        for (const s of others) {
+          await supabase
+            .from('workout_sets')
+            .update({ session_id: keep.id })
+            .eq('session_id', s.id)
+            .eq('user_id', uid);
+        }
+        await supabase
+          .from('workout_sessions')
+          .update({ duration_seconds: totalDur, ended_at: lastEnd ?? keep.ended_at })
+          .eq('id', keep.id)
+          .eq('user_id', uid);
+        await supabase
+          .from('workout_sessions')
+          .delete()
+          .in('id', others.map((s) => s.id))
+          .eq('user_id', uid);
+      }
+      exitMergeMode();
+      loadDay();
+      loadMarks();
+    };
+    showAlert(
+      'Merge sessions?',
+      `Combine the ${chosen.length} selected sessions into one — durations are added together and every set is kept.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Merge', onPress: doMerge },
+      ],
+    );
+  };
+
   const hasAnything = daySessions.length > 0 || manualGroups.length > 0;
   const viewingToday = isoDate(selectedDate) === isoDate();
+
+  // Offer to resume the most recently finished session for a short grace period
+  // (handy if you tapped Finish too early). Only when nothing else is in progress.
+  const CONTINUE_WINDOW_MS = 10 * 60 * 1000;
+  const recentSession = viewingToday
+    ? [...daySessions]
+        .filter((s) => s.ended_at)
+        .sort((a, b) => new Date(b.ended_at!).getTime() - new Date(a.ended_at!).getTime())[0]
+    : undefined;
+  const canContinue =
+    activeElapsed == null &&
+    recentSession != null &&
+    Date.now() - new Date(recentSession.ended_at!).getTime() < CONTINUE_WINDOW_MS;
 
   // Day totals for the summary strip.
   const sessionGroupsFlat = Object.values(sessionGroups).flat();
@@ -222,10 +319,28 @@ export default function WorkoutScreen() {
 
   return (
     <Screen>
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView
+        contentContainerStyle={styles.content}
+        refreshControl={
+          Platform.OS === 'web' ? undefined : (
+            <RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={theme.primary} />
+          )
+        }>
         <View style={styles.titleRow}>
           <MenuButton />
-          <ThemedText type="subtitle">Workout</ThemedText>
+          <ThemedText type="subtitle" style={{ flex: 1 }}>
+            Workout
+          </ThemedText>
+          {Platform.OS === 'web' ? (
+            <Pressable
+              onPress={refresh}
+              hitSlop={8}
+              style={[styles.refreshBtn, { borderColor: theme.border }]}>
+              <ThemedText type="smallBold" themeColor="primary">
+                {refreshing ? '↻ …' : '↻ Refresh'}
+              </ThemedText>
+            </Pressable>
+          ) : null}
         </View>
 
         {activeElapsed != null ? (
@@ -241,7 +356,21 @@ export default function WorkoutScreen() {
             </Pressable>
           </View>
         ) : viewingToday ? (
-          <Button title="＋  Start Workout" onPress={() => router.push('/workout/log')} />
+          <View style={{ gap: Spacing.two }}>
+            <Button title="＋  Start Workout" onPress={() => router.push('/workout/log')} />
+            {canContinue ? (
+              <Button
+                title="▶  Continue last session"
+                variant="secondary"
+                onPress={() =>
+                  router.push({
+                    pathname: '/workout/log',
+                    params: { continueSession: recentSession!.id },
+                  })
+                }
+              />
+            ) : null}
+          </View>
         ) : null}
 
         {/* Calendar: pick a day to see what was logged */}
@@ -300,6 +429,43 @@ export default function WorkoutScreen() {
           </View>
         ) : null}
 
+        {viewingToday && daySessions.length >= 2 && !mergeMode ? (
+          <Pressable
+            onPress={enterMergeMode}
+            style={[styles.mergeBtn, { borderColor: theme.border, backgroundColor: theme.backgroundElement }]}>
+            <ThemedText type="smallBold" themeColor="primary">
+              ⤵  Merge sessions
+            </ThemedText>
+          </Pressable>
+        ) : null}
+
+        {mergeMode ? (
+          <View style={[styles.mergeBar, { borderColor: theme.primary, backgroundColor: theme.primary + '14' }]}>
+            <ThemedText type="small" themeColor="textSecondary" style={{ flex: 1 }}>
+              {mergeSel.size < 2
+                ? 'Tick the sessions you want to merge.'
+                : `${mergeSel.size} selected`}
+            </ThemedText>
+            <Pressable onPress={exitMergeMode} hitSlop={8} style={styles.mergeBarBtn}>
+              <ThemedText type="smallBold" themeColor="textSecondary">
+                Cancel
+              </ThemedText>
+            </Pressable>
+            <Pressable
+              onPress={mergeSelected}
+              disabled={mergeSel.size < 2}
+              hitSlop={8}
+              style={[
+                styles.mergeBarBtn,
+                { backgroundColor: theme.primary, opacity: mergeSel.size < 2 ? 0.4 : 1 },
+              ]}>
+              <ThemedText type="smallBold" style={{ color: '#fff' }}>
+                Merge
+              </ThemedText>
+            </Pressable>
+          </View>
+        ) : null}
+
         {daySessions.map((s, i) => (
           <SessionCard
             key={s.id}
@@ -309,6 +475,9 @@ export default function WorkoutScreen() {
             unit={unit}
             speedUnit={speedUnit}
             weightKg={weightKg}
+            selectable={mergeMode}
+            selected={mergeSel.has(s.id)}
+            onToggleSelect={() => toggleMergeSel(s.id)}
             onEdit={() => router.push({ pathname: '/workout/edit-session/[id]', params: { id: s.id } })}
             onDelete={() => deleteSession(s)}
           />
@@ -443,6 +612,9 @@ function SessionCard({
   unit,
   speedUnit,
   weightKg,
+  selectable = false,
+  selected = false,
+  onToggleSelect,
   onEdit,
   onDelete,
 }: {
@@ -452,6 +624,9 @@ function SessionCard({
   unit: Unit;
   speedUnit: SpeedUnit;
   weightKg: number | null;
+  selectable?: boolean;
+  selected?: boolean;
+  onToggleSelect?: () => void;
   onEdit: () => void;
   onDelete: () => void;
 }) {
@@ -461,10 +636,22 @@ function SessionCard({
   const end = session.ended_at ? new Date(session.ended_at) : null;
   const totalSets = groups.reduce((a, g) => a + g.sets.length, 0);
 
-  return (
-    <Card style={styles.sessionCard}>
+  const card = (
+    <Card style={[styles.sessionCard, selected ? { borderColor: theme.primary } : null]}>
       {/* Header */}
       <View style={styles.sessionTop}>
+        {selectable ? (
+          <View
+            style={[
+              styles.checkbox,
+              {
+                borderColor: selected ? theme.primary : theme.border,
+                backgroundColor: selected ? theme.primary : 'transparent',
+              },
+            ]}>
+            <ThemedText style={{ color: '#fff', fontSize: 13 }}>{selected ? '✓' : ''}</ThemedText>
+          </View>
+        ) : null}
         <LinearGradient
           colors={['#2EA0FF', '#1257B0']}
           start={{ x: 0, y: 0 }}
@@ -484,11 +671,13 @@ function SessionCard({
             {formatDuration(session.duration_seconds ?? 0)}
           </ThemedText>
         </View>
-        <Pressable onPress={onDelete} hitSlop={10} style={{ paddingLeft: Spacing.two }}>
-          <ThemedText type="smallBold" themeColor="danger">
-            ✕
-          </ThemedText>
-        </Pressable>
+        {selectable ? null : (
+          <Pressable onPress={onDelete} hitSlop={10} style={{ paddingLeft: Spacing.two }}>
+            <ThemedText type="smallBold" themeColor="danger">
+              ✕
+            </ThemedText>
+          </Pressable>
+        )}
       </View>
 
       <View style={[styles.sessionMeta, { borderTopColor: theme.border }]}>
@@ -496,11 +685,13 @@ function SessionCard({
           {groups.length} {groups.length === 1 ? 'exercise' : 'exercises'} · {totalSets}{' '}
           {totalSets === 1 ? 'set' : 'sets'}
         </ThemedText>
-        <Pressable onPress={onEdit} hitSlop={8} style={[styles.editBtn, { borderColor: theme.border }]}>
-          <ThemedText type="small" themeColor="primary" style={{ fontWeight: '700' }}>
-            ✎ Edit
-          </ThemedText>
-        </Pressable>
+        {selectable ? null : (
+          <Pressable onPress={onEdit} hitSlop={8} style={[styles.editBtn, { borderColor: theme.border }]}>
+            <ThemedText type="small" themeColor="primary" style={{ fontWeight: '700' }}>
+              ✎ Edit
+            </ThemedText>
+          </Pressable>
+        )}
       </View>
 
       {groups.length === 0 ? (
@@ -514,6 +705,15 @@ function SessionCard({
       )}
     </Card>
   );
+
+  if (selectable) {
+    return (
+      <Pressable onPress={onToggleSelect} style={({ pressed }) => (pressed ? { opacity: 0.85 } : null)}>
+        {card}
+      </Pressable>
+    );
+  }
+  return card;
 }
 
 // One exercise: color accent bar, name + muscle tag, and sets as chips.
@@ -618,6 +818,40 @@ function ExerciseLogCard({
 const styles = StyleSheet.create({
   content: { padding: Spacing.three, gap: Spacing.three, paddingBottom: Spacing.six },
   titleRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
+  refreshBtn: {
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.one,
+    borderRadius: 999,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  mergeBtn: {
+    alignItems: 'center',
+    paddingVertical: Spacing.two + 2,
+    borderRadius: Spacing.three,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderStyle: 'dashed',
+  },
+  mergeBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    padding: Spacing.two,
+    borderRadius: Spacing.three,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  mergeBarBtn: {
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.one + 2,
+    borderRadius: 999,
+  },
+  checkbox: {
+    width: 24,
+    height: 24,
+    borderRadius: 7,
+    borderWidth: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   dayHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   readOnly: {
     borderRadius: Spacing.three,

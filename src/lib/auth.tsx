@@ -90,6 +90,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const code = Linking.parse(url).queryParams?.code;
       if (typeof code === 'string' && code.length > 0) {
         await supabase.auth.exchangeCodeForSession(code);
+        // Strip the one-time ?code= from the web URL so a reload doesn't try to
+        // re-exchange an already-used code (Google sign-in & reset links).
+        if (typeof window !== 'undefined' && window.history?.replaceState) {
+          window.history.replaceState({}, '', window.location.pathname);
+        }
       }
     };
     Linking.getInitialURL().then(exchange);

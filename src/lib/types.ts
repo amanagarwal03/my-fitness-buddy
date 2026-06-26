@@ -15,6 +15,9 @@ export const BODY_PARTS = [
 
 export type BodyPart = (typeof BODY_PARTS)[number];
 
+export type ActivityLevel = 'sedentary' | 'light' | 'moderate' | 'active' | 'very_active';
+export type FitnessGoal = 'lose' | 'maintain' | 'gain';
+
 export type Profile = {
   user_id: string;
   first_name: string | null;
@@ -29,6 +32,16 @@ export type Profile = {
   share_name: boolean;
   share_age: boolean;
   share_gender: boolean;
+  share_body: boolean;
+  // Body measurements (cm) for the body-composition screen.
+  neck_cm: number | null;
+  chest_cm: number | null;
+  biceps_cm: number | null;
+  waist_cm: number | null;
+  hips_cm: number | null;
+  thighs_cm: number | null;
+  activity_level: ActivityLevel | null;
+  goal: FitnessGoal | null;
   updated_at: string;
 };
 

@@ -1,9 +1,10 @@
-import { Stack, useFocusEffect, useRouter } from 'expo-router';
+import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import { showAlert } from '@/lib/dialog';
 
+import { DurationStepper } from '@/components/duration-stepper';
 import { StepperInput } from '@/components/stepper-input';
 import { ThemedText } from '@/components/themed-text';
 import { Button, Card, Screen } from '@/components/ui';
@@ -23,7 +24,7 @@ import { logKind, type LogKind } from '@/lib/exerciseKind';
 import { takePendingExercise } from '@/lib/pendingExercise';
 import { PREVIEW_MODE } from '@/lib/preview';
 import { requireUserId, supabase } from '@/lib/supabase';
-import type { BodyPart, Unit, WorkoutSet } from '@/lib/types';
+import type { BodyPart, Unit, WorkoutSession, WorkoutSet } from '@/lib/types';
 import { fromKg, fromKmh, round1, toKg, toKmh, type SpeedUnit } from '@/lib/units';
 
 type SetEntry = {
@@ -36,7 +37,17 @@ type SetEntry = {
   prevKg?: number | null;
   prevReps?: number | null;
 };
-type LogExercise = { key: string; id: string; name: string; bodyPart: string; kind: LogKind; sets: SetEntry[] };
+type LogExercise = {
+  key: string;
+  id: string;
+  name: string;
+  bodyPart: string;
+  kind: LogKind;
+  collapsed: boolean;
+  sets: SetEntry[];
+};
+
+const allDone = (sets: SetEntry[]) => sets.length > 0 && sets.every((s) => s.done);
 
 const emptySet = (): SetEntry => ({
   weight: '',
@@ -63,9 +74,12 @@ export default function LogWorkoutScreen() {
   const theme = useTheme();
   const router = useRouter();
   const { session: auth } = useAuth();
-  const { scrollRef, handleInputFocus, keyboardSpacerHeight } = useKeyboardAwareScroll();
+  const { continueSession } = useLocalSearchParams<{ continueSession?: string }>();
+  const { scrollRef, handleInputFocus, keyboardSpacerHeight, keyboardDismissMode } =
+    useKeyboardAwareScroll();
 
   const [unit, setUnit] = useState<Unit>('kg');
+  const [continueSessionId, setContinueSessionId] = useState<string | null>(null);
   const [speedUnit, setSpeedUnit] = useState<SpeedUnit>('kmph');
   const [exercises, setExercises] = useState<LogExercise[]>([]);
   const [saving, setSaving] = useState(false);
@@ -107,7 +121,8 @@ export default function LogWorkoutScreen() {
       .then(({ data }) => setBodyWeightKg((data?.weight_kg as number | null) ?? null));
   }, [auth]);
 
-  // Restore an in-progress workout (or start fresh with the profile's unit).
+  // Restore an in-progress workout, reopen a just-finished session to continue,
+  // or start fresh with the profile's unit.
   useEffect(() => {
     if (PREVIEW_MODE) {
       setReady(true);
@@ -123,7 +138,8 @@ export default function LogWorkoutScreen() {
         setRunningSince(saved.runningSince);
         setUnit(saved.unit);
         setSpeedUnit(saved.speedUnit ?? 'kmph');
-        // Normalise older saves that predate kind/cardio fields.
+        setContinueSessionId(saved.continueSessionId ?? null);
+        // Normalise older saves that predate kind/cardio/collapse fields.
         setExercises(
           (saved.exercises ?? []).map((ex) => ({
             key: ex.key,
@@ -131,9 +147,12 @@ export default function LogWorkoutScreen() {
             name: ex.name,
             bodyPart: ex.bodyPart,
             kind: ex.kind ?? logKind(ex.bodyPart as BodyPart, ex.name),
+            collapsed: ex.collapsed ?? false,
             sets: (ex.sets ?? []).map((s) => ({ ...emptySet(), ...s })),
           })),
         );
+      } else if (continueSession && uidRef.current) {
+        await loadSessionToContinue(continueSession, uidRef.current);
       } else if (uidRef.current) {
         const { data } = await supabase
           .from('profiles')
@@ -147,7 +166,60 @@ export default function LogWorkoutScreen() {
     return () => {
       active = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Reopen a finished session as the active workout: keep its start time, resume
+  // the clock from its saved duration, and load its sets back in (all ticked, so
+  // they re-save). Finishing then appends to this session instead of a new one.
+  const loadSessionToContinue = async (sessionId: string, uid: string) => {
+    const [profileRes, sessRes, setsRes] = await Promise.all([
+      supabase.from('profiles').select('unit_pref').eq('user_id', uid).maybeSingle(),
+      supabase
+        .from('workout_sessions')
+        .select('*')
+        .eq('id', sessionId)
+        .eq('user_id', uid)
+        .maybeSingle(),
+      supabase
+        .from('workout_sets')
+        .select('*, exercises(name, body_part)')
+        .eq('session_id', sessionId)
+        .eq('user_id', uid)
+        .order('set_number', { ascending: true }),
+    ]);
+    const sess = sessRes.data as WorkoutSession | null;
+    if (!sess) return;
+    const pref = (profileRes.data?.unit_pref as Unit) ?? 'kg';
+    setUnit(pref);
+    setContinueSessionId(sessionId);
+    setStartedAt(new Date(sess.started_at).getTime());
+    setElapsedBeforePause(sess.duration_seconds ?? 0);
+    setRunningSince(Date.now()); // resume the clock
+
+    type Joined = WorkoutSet & { exercises: { name: string; body_part: BodyPart } | null };
+    const rows = (setsRes.data ?? []) as Joined[];
+    const map = new Map<string, LogExercise>();
+    for (const r of rows) {
+      const bodyPart = r.exercises?.body_part ?? 'chest';
+      const name = r.exercises?.name ?? 'Exercise';
+      const kind = logKind(bodyPart, name);
+      const ex =
+        map.get(r.exercise_id) ??
+        ({ key: `${r.exercise_id}-${Date.now()}`, id: r.exercise_id, name, bodyPart, kind, collapsed: true, sets: [] } as LogExercise);
+      ex.sets.push({
+        ...emptySet(),
+        done: true,
+        weight: r.weight_kg != null ? String(round1(fromKg(r.weight_kg, pref))) : '',
+        reps: r.reps != null ? String(r.reps) : '',
+        durationSec: r.duration_seconds ?? 0,
+        incline: r.incline != null ? String(r.incline) : '',
+        speed: r.speed_kmh != null ? String(round1(fromKmh(r.speed_kmh, 'kmph'))) : '',
+      });
+      map.set(r.exercise_id, ex);
+    }
+    setExercises([...map.values()]);
+  };
 
   // Persist the in-progress workout whenever it changes.
   useEffect(() => {
@@ -158,10 +230,11 @@ export default function LogWorkoutScreen() {
       runningSince,
       unit,
       speedUnit,
+      continueSessionId,
       exercises,
       updatedAt: Date.now(),
     });
-  }, [ready, startedAt, elapsedBeforePause, runningSince, unit, speedUnit, exercises]);
+  }, [ready, startedAt, elapsedBeforePause, runningSince, unit, speedUnit, continueSessionId, exercises]);
 
   const paused = runningSince === null;
   const pause = () => {
@@ -215,7 +288,10 @@ export default function LogWorkoutScreen() {
       sets = [1, 2, 3].map((n) => makeStrengthSet(unitRef.current, prev[n]?.kg, prev[n]?.reps));
     }
 
-    setExercises((cur) => [...cur, { key: `${id}-${Date.now()}`, id, name, bodyPart, kind, sets }]);
+    setExercises((cur) => [
+      ...cur,
+      { key: `${id}-${Date.now()}`, id, name, bodyPart, kind, collapsed: false, sets },
+    ]);
   }, []);
 
   useFocusEffect(
@@ -234,13 +310,23 @@ export default function LogWorkoutScreen() {
       ),
     );
 
+  // Ticking the last remaining set folds the exercise away so the next one is in
+  // view. We only auto-collapse on the rising edge (not already all-done) so a
+  // manual expand isn't immediately undone.
   const toggleDone = (exKey: string, idx: number) =>
     setExercises((cur) =>
-      cur.map((ex) =>
-        ex.key === exKey
-          ? { ...ex, sets: ex.sets.map((s, i) => (i === idx ? { ...s, done: !s.done } : s)) }
-          : ex,
-      ),
+      cur.map((ex) => {
+        if (ex.key !== exKey) return ex;
+        const wasAllDone = allDone(ex.sets);
+        const sets = ex.sets.map((s, i) => (i === idx ? { ...s, done: !s.done } : s));
+        const collapsed = !wasAllDone && allDone(sets) ? true : ex.collapsed;
+        return { ...ex, sets, collapsed };
+      }),
+    );
+
+  const toggleCollapse = (exKey: string) =>
+    setExercises((cur) =>
+      cur.map((ex) => (ex.key === exKey ? { ...ex, collapsed: !ex.collapsed } : ex)),
     );
 
   const addSet = (exKey: string) =>
@@ -343,29 +429,52 @@ export default function LogWorkoutScreen() {
       return;
     }
     const durationSeconds = liveElapsed({ elapsedBeforePause, runningSince });
-    const { data: sess, error } = await supabase
-      .from('workout_sessions')
-      .insert({
-        user_id: userId,
-        started_at: new Date(startedAt).toISOString(),
-        ended_at: new Date().toISOString(),
-        duration_seconds: durationSeconds,
-      })
-      .select('id')
-      .single();
-    if (error || !sess) {
-      setSaving(false);
-      showAlert('Could not save', error?.message ?? 'Please try again.');
-      return;
+    let sessionId: string;
+    if (continueSessionId) {
+      // Append to the existing session: extend its duration & end time, then
+      // rebuild its sets from scratch (we loaded the originals back in).
+      const { error: upErr } = await supabase
+        .from('workout_sessions')
+        .update({ ended_at: new Date().toISOString(), duration_seconds: durationSeconds })
+        .eq('id', continueSessionId)
+        .eq('user_id', userId);
+      if (upErr) {
+        setSaving(false);
+        showAlert('Could not save', upErr.message);
+        return;
+      }
+      await supabase
+        .from('workout_sets')
+        .delete()
+        .eq('session_id', continueSessionId)
+        .eq('user_id', userId);
+      sessionId = continueSessionId;
+    } else {
+      const { data: sess, error } = await supabase
+        .from('workout_sessions')
+        .insert({
+          user_id: userId,
+          started_at: new Date(startedAt).toISOString(),
+          ended_at: new Date().toISOString(),
+          duration_seconds: durationSeconds,
+        })
+        .select('id')
+        .single();
+      if (error || !sess) {
+        setSaving(false);
+        showAlert('Could not save', error?.message ?? 'Please try again.');
+        return;
+      }
+      sessionId = sess.id;
     }
-    const today = isoDate();
+    const today = continueSessionId ? isoDate(new Date(startedAt)) : isoDate();
     const rows = exercises.flatMap((ex) => {
       const doneSetsForEx = ex.sets.filter((s) => s.done);
       return doneSetsForEx.map((s, i) => {
         const base = {
           user_id: userId,
           exercise_id: ex.id,
-          session_id: sess.id,
+          session_id: sessionId,
           performed_on: today,
           set_number: i + 1,
           weight_kg: null as number | null,
@@ -420,7 +529,7 @@ export default function LogWorkoutScreen() {
     <Screen edges={['bottom']}>
       <Stack.Screen
         options={{
-          title: 'Log Workout',
+          title: continueSessionId ? 'Continue Workout' : 'Log Workout',
           headerRight: () => (
             <Pressable onPress={finish} hitSlop={8} disabled={saving}>
               <ThemedText type="smallBold" themeColor="primary" style={{ fontSize: 16 }}>
@@ -434,7 +543,7 @@ export default function LogWorkoutScreen() {
         ref={scrollRef}
         contentContainerStyle={styles.content}
         keyboardShouldPersistTaps="handled"
-        keyboardDismissMode="on-drag">
+        keyboardDismissMode={keyboardDismissMode}>
         {/* Live stats */}
         <Card>
           <View style={styles.statsRow}>
@@ -476,42 +585,67 @@ export default function LogWorkoutScreen() {
           </View>
         </Card>
 
-        {exercises.map((ex) => (
-          <Card key={ex.key}>
-            <View style={styles.exHeader}>
-              <ThemedText type="smallBold" themeColor="primary" style={{ flex: 1 }}>
-                {ex.name}
-              </ThemedText>
-              <Pressable onPress={() => removeExercise(ex.key)} hitSlop={10}>
-                <ThemedText type="smallBold" themeColor="danger">
-                  ✕
-                </ThemedText>
-              </Pressable>
-            </View>
+        {exercises.map((ex) => {
+          const doneCount = ex.sets.filter((s) => s.done).length;
+          const complete = allDone(ex.sets);
+          return (
+            <Card key={ex.key}>
+              <View style={styles.exHeader}>
+                <Pressable
+                  onPress={() => toggleCollapse(ex.key)}
+                  hitSlop={8}
+                  style={styles.collapseToggle}>
+                  <ThemedText type="smallBold" themeColor="textSecondary">
+                    {ex.collapsed ? '▸' : '▾'}
+                  </ThemedText>
+                </Pressable>
+                <Pressable onPress={() => toggleCollapse(ex.key)} style={{ flex: 1 }}>
+                  <ThemedText type="smallBold" themeColor="primary">
+                    {complete ? '✓ ' : ''}
+                    {ex.name}
+                  </ThemedText>
+                </Pressable>
+                <Pressable onPress={() => removeExercise(ex.key)} hitSlop={10}>
+                  <ThemedText type="smallBold" themeColor="danger">
+                    ✕
+                  </ThemedText>
+                </Pressable>
+              </View>
 
-            {ex.kind === 'strength' ? (
-              <StrengthSets
-                ex={ex}
-                unit={unit}
-                onPatch={patchSet}
-                onToggleDone={toggleDone}
-                onAddSet={addSet}
-                onFocus={handleInputFocus}
-              />
-            ) : ex.kind === 'duration' ? (
-              <DurationSets ex={ex} onPatch={patchSet} onToggleDone={toggleDone} onAddSet={addSet} />
-            ) : (
-              <CardioEntry
-                ex={ex}
-                speedUnit={speedUnit}
-                bodyWeightKg={bodyWeightKg}
-                onPatch={patchSet}
-                onToggleDone={toggleDone}
-                onFocus={handleInputFocus}
-              />
-            )}
-          </Card>
-        ))}
+              {ex.collapsed ? (
+                <Pressable onPress={() => toggleCollapse(ex.key)} style={styles.exSummary}>
+                  <ThemedText type="small" themeColor="textSecondary">
+                    {ex.kind === 'cardio'
+                      ? ex.sets[0]?.done
+                        ? 'Run added · tap to edit'
+                        : 'Tap to add this run'
+                      : `${doneCount} of ${ex.sets.length} ${ex.sets.length === 1 ? 'set' : 'sets'} done · tap to edit`}
+                  </ThemedText>
+                </Pressable>
+              ) : ex.kind === 'strength' ? (
+                <StrengthSets
+                  ex={ex}
+                  unit={unit}
+                  onPatch={patchSet}
+                  onToggleDone={toggleDone}
+                  onAddSet={addSet}
+                  onFocus={handleInputFocus}
+                />
+              ) : ex.kind === 'duration' ? (
+                <DurationSets ex={ex} onPatch={patchSet} onToggleDone={toggleDone} onAddSet={addSet} />
+              ) : (
+                <CardioEntry
+                  ex={ex}
+                  speedUnit={speedUnit}
+                  bodyWeightKg={bodyWeightKg}
+                  onPatch={patchSet}
+                  onToggleDone={toggleDone}
+                  onFocus={handleInputFocus}
+                />
+              )}
+            </Card>
+          );
+        })}
 
         {exercises.length === 0 ? (
           <Card>
@@ -726,28 +860,6 @@ function CardioRow({ label, children }: { label: string; children: ReactNode }) 
   );
 }
 
-function DurationStepper({ value, onChange }: { value: number; onChange: (v: number) => void }) {
-  const theme = useTheme();
-  const bump = (d: number) => onChange(Math.max(0, value + d));
-  return (
-    <View style={[styles.durWrap, { borderColor: theme.border, backgroundColor: theme.background }]}>
-      <Pressable
-        onPress={() => bump(-15)}
-        hitSlop={6}
-        style={[styles.durBtn, { borderRightColor: theme.border, borderRightWidth: StyleSheet.hairlineWidth }]}>
-        <ThemedText style={[styles.durGlyph, { color: theme.primary }]}>−</ThemedText>
-      </Pressable>
-      <ThemedText style={[styles.durVal, { color: theme.text }]}>{formatDuration(value)}</ThemedText>
-      <Pressable
-        onPress={() => bump(15)}
-        hitSlop={6}
-        style={[styles.durBtn, { borderLeftColor: theme.border, borderLeftWidth: StyleSheet.hairlineWidth }]}>
-        <ThemedText style={[styles.durGlyph, { color: theme.primary }]}>＋</ThemedText>
-      </Pressable>
-    </View>
-  );
-}
-
 function Toggle<T extends string>({
   value,
   onChange,
@@ -847,15 +959,6 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     marginTop: Spacing.one,
   },
-  durWrap: {
-    flexDirection: 'row',
-    alignItems: 'stretch',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 12,
-    overflow: 'hidden',
-    minHeight: 48,
-  },
-  durBtn: { width: 44, alignItems: 'center', justifyContent: 'center' },
-  durGlyph: { fontSize: 22, lineHeight: 26, fontWeight: '800' },
-  durVal: { flex: 1, textAlign: 'center', fontSize: 17, fontWeight: '700', alignSelf: 'center' },
+  collapseToggle: { width: 22, alignItems: 'center' },
+  exSummary: { marginTop: Spacing.one },
 });

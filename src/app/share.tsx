@@ -1,13 +1,16 @@
-import { Stack, useRouter } from 'expo-router';
+import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { Pressable, ScrollView, Share, StyleSheet, View } from 'react-native';
 
 import { showAlert } from '@/lib/dialog';
 
+import { MenuHeader } from '@/components/side-nav';
 import { ThemedText } from '@/components/themed-text';
+import { ToggleRow } from '@/components/toggle-row';
 import { Button, Card, Field, Screen } from '@/components/ui';
 import { Spacing } from '@/constants/theme';
 import { useAuth } from '@/lib/auth';
+import { PREVIEW_MODE } from '@/lib/preview';
 import {
   getOrCreateMyCode,
   listMyViewers,
@@ -16,6 +19,10 @@ import {
   removeGrant,
   type ShareGrant,
 } from '@/lib/sharing';
+import { requireUserId, supabase } from '@/lib/supabase';
+import type { Profile } from '@/lib/types';
+
+type SharePref = 'share_name' | 'share_age' | 'share_gender' | 'share_body';
 
 export default function ShareScreen() {
   const router = useRouter();
@@ -28,6 +35,14 @@ export default function ShareScreen() {
   const [viewers, setViewers] = useState<ShareGrant[]>([]);
   const [sharedWithMe, setSharedWithMe] = useState<ShareGrant[]>([]);
 
+  // What coaches see — persisted on the profile row.
+  const [prefs, setPrefs] = useState<Record<SharePref, boolean>>({
+    share_name: true,
+    share_age: false,
+    share_gender: false,
+    share_body: false,
+  });
+
   const refresh = useCallback(async () => {
     if (!userId) return;
     const [v, s] = await Promise.all([listMyViewers(userId), listSharedWithMe(userId)]);
@@ -39,7 +54,40 @@ export default function ShareScreen() {
     if (!userId) return;
     getOrCreateMyCode(userId).then(setMyCode).catch((e) => showAlert('Error', String(e)));
     refresh();
+    if (!PREVIEW_MODE) {
+      supabase
+        .from('profiles')
+        .select('share_name, share_age, share_gender, share_body')
+        .eq('user_id', userId)
+        .maybeSingle()
+        .then(({ data }) => {
+          const p = data as Partial<Profile> | null;
+          if (p)
+            setPrefs({
+              share_name: p.share_name ?? true,
+              share_age: p.share_age ?? false,
+              share_gender: p.share_gender ?? false,
+              share_body: p.share_body ?? false,
+            });
+        });
+    }
   }, [userId, refresh]);
+
+  // Persist a single sharing toggle; revert + warn if the write fails (e.g. the
+  // share_body column hasn't been migrated yet).
+  const setPref = async (field: SharePref, value: boolean) => {
+    const prev = prefs[field];
+    setPrefs((p) => ({ ...p, [field]: value }));
+    if (PREVIEW_MODE) return;
+    try {
+      const uid = await requireUserId();
+      const { error } = await supabase.from('profiles').upsert({ user_id: uid, [field]: value });
+      if (error) throw error;
+    } catch (e) {
+      setPrefs((p) => ({ ...p, [field]: prev }));
+      showAlert('Could not save', e instanceof Error ? e.message : String(e));
+    }
+  };
 
   const shareCode = async () => {
     if (!myCode) return;
@@ -82,9 +130,10 @@ export default function ShareScreen() {
   };
 
   return (
-    <Screen edges={['bottom']}>
-      <Stack.Screen options={{ title: 'Share & coaches' }} />
+    <Screen>
       <ScrollView contentContainerStyle={styles.content}>
+        <MenuHeader title="Share & coaches" />
+
         {/* My code */}
         <Card style={{ alignItems: 'center', gap: Spacing.two }}>
           <ThemedText type="small" themeColor="textSecondary">
@@ -97,6 +146,25 @@ export default function ShareScreen() {
             Share this with a coach or friend so they can view your meals and workouts (read-only).
           </ThemedText>
           <Button title="Share code" onPress={shareCode} style={{ alignSelf: 'stretch' }} />
+        </Card>
+
+        {/* What coaches can see */}
+        <ThemedText type="smallBold" themeColor="textSecondary">
+          WHAT YOUR COACHES SEE
+        </ThemedText>
+        <Card style={{ gap: Spacing.one }}>
+          <ThemedText type="small" themeColor="textSecondary">
+            Your meals & workouts are always shared. Choose what else coaches can see.
+          </ThemedText>
+          <ToggleRow label="Your name" value={prefs.share_name} onValueChange={(v) => setPref('share_name', v)} />
+          <ToggleRow label="Your age" value={prefs.share_age} onValueChange={(v) => setPref('share_age', v)} />
+          <ToggleRow label="Your gender" value={prefs.share_gender} onValueChange={(v) => setPref('share_gender', v)} />
+          <ToggleRow
+            label="Body composition"
+            sublabel="Metrics & measurements"
+            value={prefs.share_body}
+            onValueChange={(v) => setPref('share_body', v)}
+          />
         </Card>
 
         {/* Redeem someone else's code */}

@@ -64,7 +64,8 @@ function StrengthLog({ id, name }: { id: string; name?: string }) {
   const theme = useTheme();
   const { session: auth } = useAuth();
   const uid = auth?.user.id;
-  const { scrollRef, handleInputFocus, keyboardSpacerHeight } = useKeyboardAwareScroll();
+  const { scrollRef, handleInputFocus, keyboardSpacerHeight, keyboardDismissMode } =
+    useKeyboardAwareScroll();
   const [unit, setUnit] = useState<Unit>('kg');
   const [rows, setRows] = useState<SetRow[]>(emptyRows(3));
   const [saving, setSaving] = useState(false);
@@ -194,7 +195,7 @@ function StrengthLog({ id, name }: { id: string; name?: string }) {
       ref={scrollRef}
       contentContainerStyle={styles.content}
       keyboardShouldPersistTaps="handled"
-      keyboardDismissMode="on-drag">
+      keyboardDismissMode={keyboardDismissMode}>
       <View style={styles.headerRow}>
         <ThemedText type="smallBold" themeColor="textSecondary">
           UNIT
@@ -262,7 +263,8 @@ function StrengthLog({ id, name }: { id: string; name?: string }) {
 function CardioLog({ id, name }: { id: string; name?: string }) {
   const { session: auth } = useAuth();
   const uid = auth?.user.id;
-  const { scrollRef, handleInputFocus, keyboardSpacerHeight } = useKeyboardAwareScroll();
+  const { scrollRef, handleInputFocus, keyboardSpacerHeight, keyboardDismissMode } =
+    useKeyboardAwareScroll();
   const [speedUnit, setSpeedUnit] = useState<SpeedUnit>('kmph');
   const [incline, setIncline] = useState('');
   const [speed, setSpeed] = useState('');
@@ -414,7 +416,7 @@ function CardioLog({ id, name }: { id: string; name?: string }) {
       ref={scrollRef}
       contentContainerStyle={styles.content}
       keyboardShouldPersistTaps="handled"
-      keyboardDismissMode="on-drag">
+      keyboardDismissMode={keyboardDismissMode}>
       <Card style={{ alignItems: 'center', gap: Spacing.two }}>
         <ThemedText type="small" themeColor="textSecondary">
           DURATION
