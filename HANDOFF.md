@@ -7,7 +7,7 @@
 Expo SDK 54 / React Native 0.81 app (TypeScript, expo-router, React Compiler). Nutrition tracking (photo → Gemini nutrition analysis, barcode, food search, goals, BMI, body composition) + workout tracking (sets, cardio, progress, sessions) + coach sharing. Backend: Supabase (auth PKCE, Postgres w/ RLS, Storage, Edge Functions `analyze-meal` + `food-search`). Repo: `/Users/amanagarwal03/Desktop/Claude Projects/My Fitness Buddy`.
 
 ## Where it's live
-- **Web app (mobile site):** https://myfitnessbuddyapp.netlify.app/ — built with `npx expo export --platform web` → `dist/`. **Redeploy:** drag the `dist/` folder onto the **Deploys tab** drop zone (NOT /drop, which makes a new site). `dist/_redirects` (`/* /index.html 200`) is what makes routing work.
+- **Web app (mobile site):** https://myfitnessbuddy.pages.dev — **Cloudflare Pages** (moved off Netlify 2026-06-29 because Netlify's free tier ran out of credits and blocked deploys). Built with `npx expo export --platform web` → `dist/`. **Redeploy:** Cloudflare dash → Workers & Pages → `myfitnessbuddy` Pages project → upload/drag the `dist/` folder. Cloudflare reads the same `dist/_redirects` (`/* /index.html 200`) that makes SPA routing work. (Old `myfitnessbuddyapp.netlify.app` is stale.)
 - **Privacy policy:** https://myfitnessbuddypartner.netlify.app/
 - **Play Console:** app `com.myfitnessbuddy.app`, Internal testing.
 - **Supabase:** project ref `cywwfeebpklgyesauqvt`.

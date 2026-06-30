@@ -44,9 +44,7 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
 
 type StrengthStats = {
   kind: 'strength';
-  best: number; // kg
-  est1rm: number; // kg, Epley
-  totalVolume: number; // kg
+  best: number; // kg, heaviest single set
   totalSets: number;
   totalReps: number;
   sessions: number;
@@ -66,14 +64,17 @@ export default function ProgressScreen() {
   const theme = useTheme();
   const { session } = useAuth();
   const uid = session?.user.id;
-  const { id, name, bodyPart } = useLocalSearchParams<{
+  const { id, name, bodyPart, unit: unitParam } = useLocalSearchParams<{
     id: string;
     name?: string;
     bodyPart?: BodyPart;
+    unit?: Unit;
   }>();
   const isCardio = bodyPart === 'cardio';
   const [range, setRange] = useState<Range>('day');
-  const [unit, setUnit] = useState<Unit>('kg');
+  // Prefer the unit the caller was viewing (the log screen's kg/lbs toggle);
+  // fall back to the profile preference only when none was passed.
+  const [unit, setUnit] = useState<Unit>(unitParam === 'lbs' || unitParam === 'kg' ? unitParam : 'kg');
   const [sets, setSets] = useState<WorkoutSet[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -83,7 +84,7 @@ export default function ProgressScreen() {
   const load = useCallback(async () => {
     if (!id) return;
     if (PREVIEW_MODE) {
-      setUnit('kg');
+      if (unitParam !== 'kg' && unitParam !== 'lbs') setUnit('kg');
       // Spread the sample history over recent days so day/week/month all render.
       const series = isCardio ? previewProgressKmh : previewProgressKg;
       const n = series.length;
@@ -118,10 +119,11 @@ export default function ProgressScreen() {
         .gte('performed_on', since.toISOString().slice(0, 10))
         .order('performed_on', { ascending: true }),
     ]);
-    setUnit((profileRes.data?.unit_pref as Unit) ?? 'kg');
+    // Only adopt the profile unit when the caller didn't pass one.
+    if (unitParam !== 'kg' && unitParam !== 'lbs') setUnit((profileRes.data?.unit_pref as Unit) ?? 'kg');
     setSets((setsRes.data as WorkoutSet[]) ?? []);
     setLoading(false);
-  }, [id, uid]);
+  }, [id, uid, unitParam]);
 
   useFocusEffect(
     useCallback(() => {
@@ -198,8 +200,6 @@ export default function ProgressScreen() {
       return { kind: 'cardio', topSpeed, longest, totalDistance, totalDuration, sessions: days.size, bestDay };
     }
     let best = 0;
-    let est1rm = 0;
-    let totalVolume = 0;
     let totalReps = 0;
     let totalSets = 0;
     const volByDay = new Map<string, number>();
@@ -208,8 +208,6 @@ export default function ProgressScreen() {
       const w = s.weight_kg ?? 0;
       const r = s.reps ?? 0;
       best = Math.max(best, w);
-      est1rm = Math.max(est1rm, w * (1 + r / 30)); // Epley 1RM estimate
-      totalVolume += w * r;
       totalReps += r;
       totalSets += 1;
       volByDay.set(s.performed_on, (volByDay.get(s.performed_on) ?? 0) + w * r);
@@ -222,7 +220,7 @@ export default function ProgressScreen() {
         bestDay = day;
       }
     }
-    return { kind: 'strength', best, est1rm, totalVolume, totalSets, totalReps, sessions: days.size, bestDay };
+    return { kind: 'strength', best, totalSets, totalReps, sessions: days.size, bestDay };
   }, [sets, isCardio]);
 
   // Per-day set-by-set history (most recent first).
@@ -299,9 +297,9 @@ export default function ProgressScreen() {
             {stats?.kind === 'strength' ? (
               <View style={styles.tileGrid}>
                 <StatTile emoji="🏆" accent={theme.success} label="Personal best" value={`${round1(fromKg(stats.best, unit))}`} unit={unit} />
-                <StatTile emoji="💪" accent={theme.primary} label="Est. 1RM" value={`${Math.round(fromKg(stats.est1rm, unit))}`} unit={unit} />
-                <StatTile emoji="🔥" accent="#F59E0B" label="Total volume" value={compact(Math.round(fromKg(stats.totalVolume, unit)))} unit={unit} />
-                <StatTile emoji="📅" accent="#8B5CF6" label="Sessions" value={`${stats.sessions}`} unit={`${stats.totalSets} sets`} />
+                <StatTile emoji="🔁" accent={theme.primary} label="Total sets" value={`${stats.totalSets}`} />
+                <StatTile emoji="💪" accent="#F59E0B" label="Total reps" value={`${stats.totalReps}`} />
+                <StatTile emoji="📅" accent="#8B5CF6" label="Sessions" value={`${stats.sessions}`} />
               </View>
             ) : stats?.kind === 'cardio' ? (
               <View style={styles.tileGrid}>
@@ -383,12 +381,6 @@ export default function ProgressScreen() {
       </ScrollView>
     </Screen>
   );
-}
-
-// Compact big numbers: 12500 → "12.5k".
-function compact(n: number): string {
-  if (n >= 1000) return `${round1(n / 1000)}k`;
-  return String(n);
 }
 
 function StatTile({

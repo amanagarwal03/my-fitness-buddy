@@ -633,7 +633,7 @@ export default function LogWorkoutScreen() {
                     onPress={() =>
                       router.push({
                         pathname: '/workout/progress/[id]',
-                        params: { id: ex.id, name: ex.name, bodyPart: ex.bodyPart },
+                        params: { id: ex.id, name: ex.name, bodyPart: ex.bodyPart, unit },
                       })
                     }
                   />
