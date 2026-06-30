@@ -29,6 +29,7 @@ export type StoredExercise = {
   bodyPart: string;
   kind?: LogKind; // how this exercise is logged (absent on older saves)
   collapsed?: boolean; // editor folded away (absent on older saves)
+  hasPrev?: boolean; // this exercise has earlier logged data (absent on older saves)
   sets: StoredSet[];
 };
 export type ActiveWorkout = {

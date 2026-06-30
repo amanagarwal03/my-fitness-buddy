@@ -1,6 +1,6 @@
 import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import { showAlert } from '@/lib/dialog';
 
@@ -44,6 +44,7 @@ type LogExercise = {
   bodyPart: string;
   kind: LogKind;
   collapsed: boolean;
+  hasPrev: boolean; // there is earlier logged data for this exercise
   sets: SetEntry[];
 };
 
@@ -82,6 +83,7 @@ export default function LogWorkoutScreen() {
   const [continueSessionId, setContinueSessionId] = useState<string | null>(null);
   const [speedUnit, setSpeedUnit] = useState<SpeedUnit>('kmph');
   const [exercises, setExercises] = useState<LogExercise[]>([]);
+  const [historyEx, setHistoryEx] = useState<LogExercise | null>(null);
   const [saving, setSaving] = useState(false);
   const [bodyWeightKg, setBodyWeightKg] = useState<number | null>(null);
   const [startedAt, setStartedAt] = useState<number>(() => Date.now());
@@ -148,6 +150,7 @@ export default function LogWorkoutScreen() {
             bodyPart: ex.bodyPart,
             kind: ex.kind ?? logKind(ex.bodyPart as BodyPart, ex.name),
             collapsed: ex.collapsed ?? false,
+            hasPrev: ex.hasPrev ?? false,
             sets: (ex.sets ?? []).map((s) => ({ ...emptySet(), ...s })),
           })),
         );
@@ -206,7 +209,7 @@ export default function LogWorkoutScreen() {
       const kind = logKind(bodyPart, name);
       const ex =
         map.get(r.exercise_id) ??
-        ({ key: `${r.exercise_id}-${Date.now()}`, id: r.exercise_id, name, bodyPart, kind, collapsed: true, sets: [] } as LogExercise);
+        ({ key: `${r.exercise_id}-${Date.now()}`, id: r.exercise_id, name, bodyPart, kind, collapsed: true, hasPrev: true, sets: [] } as LogExercise);
       ex.sets.push({
         ...emptySet(),
         done: true,
@@ -250,6 +253,7 @@ export default function LogWorkoutScreen() {
     const kind = logKind(bodyPart as BodyPart, name);
     const prev: Record<number, { kg: number | null; reps: number | null }> = {};
     let lastRow: WorkoutSet | undefined;
+    let lastDaySetCount = 0;
     if (!PREVIEW_MODE && uidRef.current) {
       const { data } = await supabase
         .from('workout_sets')
@@ -262,12 +266,13 @@ export default function LogWorkoutScreen() {
       const rows = (data as WorkoutSet[]) ?? [];
       lastRow = rows[0];
       const lastDay = rows[0]?.performed_on;
-      rows
-        .filter((r) => r.performed_on === lastDay)
-        .forEach((r) => {
-          prev[r.set_number] = { kg: r.weight_kg, reps: r.reps };
-        });
+      const lastDayRows = rows.filter((r) => r.performed_on === lastDay);
+      lastDaySetCount = lastDayRows.length;
+      lastDayRows.forEach((r) => {
+        prev[r.set_number] = { kg: r.weight_kg, reps: r.reps };
+      });
     }
+    const hasPrev = lastRow != null;
 
     let sets: SetEntry[];
     if (kind === 'cardio') {
@@ -285,12 +290,17 @@ export default function LogWorkoutScreen() {
     } else if (kind === 'duration') {
       sets = [{ ...emptySet(), durationSec: lastRow?.duration_seconds ?? 0 }];
     } else {
-      sets = [1, 2, 3].map((n) => makeStrengthSet(unitRef.current, prev[n]?.kg, prev[n]?.reps));
+      // Mirror last time: as many sets as the previous occurrence, each pre-filled
+      // with that set's weight/reps. Falls back to 3 blank sets for a new exercise.
+      const count = Math.max(1, lastDaySetCount || 3);
+      sets = Array.from({ length: count }, (_, i) =>
+        makeStrengthSet(unitRef.current, prev[i + 1]?.kg, prev[i + 1]?.reps),
+      );
     }
 
     setExercises((cur) => [
       ...cur,
-      { key: `${id}-${Date.now()}`, id, name, bodyPart, kind, collapsed: false, sets },
+      { key: `${id}-${Date.now()}`, id, name, bodyPart, kind, collapsed: false, hasPrev, sets },
     ]);
   }, []);
 
@@ -599,10 +609,13 @@ export default function LogWorkoutScreen() {
                     {ex.collapsed ? '▸' : '▾'}
                   </ThemedText>
                 </Pressable>
-                <Pressable onPress={() => toggleCollapse(ex.key)} style={{ flex: 1 }}>
+                <Pressable
+                  onPress={() => (ex.hasPrev ? setHistoryEx(ex) : toggleCollapse(ex.key))}
+                  style={{ flex: 1 }}>
                   <ThemedText type="smallBold" themeColor="primary">
                     {complete ? '✓ ' : ''}
                     {ex.name}
+                    {ex.hasPrev ? <ThemedText type="small" themeColor="textSecondary">  🕘</ThemedText> : null}
                   </ThemedText>
                 </Pressable>
                 <Pressable onPress={() => removeExercise(ex.key)} hitSlop={10}>
@@ -611,6 +624,21 @@ export default function LogWorkoutScreen() {
                   </ThemedText>
                 </Pressable>
               </View>
+
+              {!ex.collapsed && ex.hasPrev ? (
+                <View style={styles.exActions}>
+                  <HeaderChip label="🕘  Past details" onPress={() => setHistoryEx(ex)} />
+                  <HeaderChip
+                    label="📈  Progress"
+                    onPress={() =>
+                      router.push({
+                        pathname: '/workout/progress/[id]',
+                        params: { id: ex.id, name: ex.name, bodyPart: ex.bodyPart },
+                      })
+                    }
+                  />
+                </View>
+              ) : null}
 
               {ex.collapsed ? (
                 <Pressable onPress={() => toggleCollapse(ex.key)} style={styles.exSummary}>
@@ -660,7 +688,180 @@ export default function LogWorkoutScreen() {
         <Button title="Discard workout" variant="secondary" onPress={discard} />
         <View style={{ height: keyboardSpacerHeight }} />
       </ScrollView>
+
+      <ExerciseHistoryModal
+        ex={historyEx}
+        unit={unit}
+        speedUnit={speedUnit}
+        onClose={() => setHistoryEx(null)}
+      />
     </Screen>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Past-details modal: this exercise's history, newest day first (3 shown, rest
+// behind a "Show more"). Opened by tapping the exercise name or "Past details".
+// ---------------------------------------------------------------------------
+type HistoryDay = { day: string; sets: WorkoutSet[] };
+
+function historyDayLabel(day: string): string {
+  const d = new Date(`${day}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return day;
+  const today = isoDate();
+  const yest = new Date();
+  yest.setDate(yest.getDate() - 1);
+  if (day === today) return 'Today';
+  if (day === isoDate(yest)) return 'Yesterday';
+  return d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function ExerciseHistoryModal({
+  ex,
+  unit,
+  speedUnit,
+  onClose,
+}: {
+  ex: LogExercise | null;
+  unit: Unit;
+  speedUnit: SpeedUnit;
+  onClose: () => void;
+}) {
+  const theme = useTheme();
+  const { session: auth } = useAuth();
+  const [days, setDays] = useState<HistoryDay[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [expanded, setExpanded] = useState(false);
+
+  useEffect(() => {
+    if (!ex) return;
+    setExpanded(false);
+    setLoading(true);
+    setDays([]);
+    const uid = auth?.user.id;
+    if (PREVIEW_MODE || !uid) {
+      setLoading(false);
+      return;
+    }
+    let active = true;
+    (async () => {
+      const { data } = await supabase
+        .from('workout_sets')
+        .select('*')
+        .eq('user_id', uid)
+        .eq('exercise_id', ex.id)
+        .order('performed_on', { ascending: false })
+        .order('set_number', { ascending: true })
+        .limit(120);
+      if (!active) return;
+      const rows = (data as WorkoutSet[]) ?? [];
+      const map = new Map<string, WorkoutSet[]>();
+      for (const r of rows) {
+        const arr = map.get(r.performed_on) ?? [];
+        arr.push(r);
+        map.set(r.performed_on, arr);
+      }
+      setDays([...map.entries()].map(([day, sets]) => ({ day, sets })));
+      setLoading(false);
+    })();
+    return () => {
+      active = false;
+    };
+  }, [ex, auth]);
+
+  const setLine = (s: WorkoutSet): string => {
+    if (!ex) return '';
+    if (ex.kind === 'cardio') {
+      const parts = [formatDuration(s.duration_seconds ?? 0)];
+      if (s.speed_kmh != null)
+        parts.push(`${round1(fromKmh(s.speed_kmh, speedUnit))} ${speedUnit === 'kmph' ? 'km/h' : 'mph'}`);
+      if (s.incline != null) parts.push(`${s.incline}% incline`);
+      return parts.join(' · ');
+    }
+    if (ex.kind === 'duration') return formatDuration(s.duration_seconds ?? 0);
+    const w = s.weight_kg != null ? `${round1(fromKg(s.weight_kg, unit))} ${unit}` : '—';
+    return `${w}${s.reps != null ? ` × ${s.reps}` : ''}`;
+  };
+
+  const shown = expanded ? days : days.slice(0, 3);
+
+  return (
+    <Modal visible={!!ex} transparent animationType="slide" onRequestClose={onClose}>
+      <Pressable style={styles.histOverlay} onPress={onClose}>
+        <Pressable
+          style={[styles.histSheet, { backgroundColor: theme.background, borderColor: theme.border }]}
+          onPress={() => {}}>
+          <View style={styles.histHeader}>
+            <View style={{ flex: 1 }}>
+              <ThemedText type="smallBold" themeColor="textSecondary">
+                PAST DETAILS
+              </ThemedText>
+              <ThemedText type="subtitle" numberOfLines={1}>
+                {ex?.name ?? ''}
+              </ThemedText>
+            </View>
+            <Pressable onPress={onClose} hitSlop={10}>
+              <ThemedText type="smallBold" themeColor="primary">
+                Done
+              </ThemedText>
+            </Pressable>
+          </View>
+
+          {loading ? (
+            <View style={{ paddingVertical: Spacing.five, alignItems: 'center' }}>
+              <ActivityIndicator color={theme.primary} />
+            </View>
+          ) : days.length === 0 ? (
+            <ThemedText type="small" themeColor="textSecondary" style={{ paddingVertical: Spacing.four }}>
+              No past entries yet — this will fill up once you log this exercise.
+            </ThemedText>
+          ) : (
+            <ScrollView style={{ maxHeight: 420 }} contentContainerStyle={{ gap: Spacing.three, paddingBottom: Spacing.two }}>
+              {shown.map((d) => (
+                <View key={d.day} style={[styles.histDay, { borderColor: theme.border }]}>
+                  <ThemedText type="smallBold">{historyDayLabel(d.day)}</ThemedText>
+                  <View style={{ gap: 2, marginTop: Spacing.one }}>
+                    {d.sets.map((s, i) => (
+                      <View key={s.id} style={styles.histSetRow}>
+                        <ThemedText type="small" themeColor="textSecondary" style={{ width: 34 }}>
+                          {ex?.kind === 'strength' ? `#${i + 1}` : ''}
+                        </ThemedText>
+                        <ThemedText type="small" style={{ flex: 1 }}>
+                          {setLine(s)}
+                        </ThemedText>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+              ))}
+              {days.length > 3 ? (
+                <Pressable onPress={() => setExpanded((e) => !e)} hitSlop={8} style={{ alignSelf: 'center', paddingVertical: Spacing.two }}>
+                  <ThemedText type="smallBold" themeColor="primary">
+                    {expanded ? 'Show less' : `Show ${days.length - 3} more`}
+                  </ThemedText>
+                </Pressable>
+              ) : null}
+            </ScrollView>
+          )}
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
+function HeaderChip({ label, onPress }: { label: string; onPress: () => void }) {
+  const theme = useTheme();
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.headerChip,
+        { borderColor: theme.border, opacity: pressed ? 0.6 : 1 },
+      ]}>
+      <ThemedText type="small" themeColor="textSecondary">
+        {label}
+      </ThemedText>
+    </Pressable>
   );
 }
 
@@ -961,4 +1162,32 @@ const styles = StyleSheet.create({
   },
   collapseToggle: { width: 22, alignItems: 'center' },
   exSummary: { marginTop: Spacing.one },
+  exActions: { flexDirection: 'row', gap: Spacing.two, marginTop: Spacing.one },
+  headerChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: Spacing.two + 2,
+    paddingVertical: Spacing.one,
+    borderRadius: 999,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  histOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'flex-end',
+  },
+  histSheet: {
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    borderWidth: StyleSheet.hairlineWidth,
+    padding: Spacing.four,
+    gap: Spacing.three,
+  },
+  histHeader: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
+  histDay: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: Spacing.two,
+    padding: Spacing.three,
+  },
+  histSetRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.one },
 });
